@@ -54,6 +54,61 @@ pub fn move_codex_thread_workspace_from_paths(
     result
 }
 
+/// 对「已合并去重」的会话列表做关键词过滤 + 排序 + 分页切片。
+///
+/// 必须在多 db 合并去重之后调用，保证跨 db 的分页正确（不能每个 db 各取一页）。
+/// 900 条级别的全量合并+去重+排序是毫秒级，不是瓶颈；真正的瓶颈是
+/// IPC 全量序列化 + 前端全量 DOM 渲染，所以这里切片后只传当页到前端。
+///
+/// 参数：
+/// - `sessions`: 调用方已完成多 db 合并与去重的全量列表（本函数会原地过滤/排序/切片）。
+/// - `limit`/`offset`: 分页参数；`limit <= 0` 表示不分页（返回全部）。
+/// - `query`: 可选搜索词，在 id/title/cwd/model_provider 上做大小写不敏感包含匹配。
+pub fn paginate_local_sessions(
+    mut sessions: Vec<LocalSession>,
+    limit: i64,
+    offset: i64,
+    query: Option<&str>,
+) -> PagedLocalSessions {
+    // 关键词过滤（在排序前过滤，减少排序工作量）
+    if let Some(query) = query {
+        let needle = query.trim().to_lowercase();
+        if !needle.is_empty() {
+            sessions.retain(|session| {
+                session.id.to_lowercase().contains(&needle)
+                    || session.title.to_lowercase().contains(&needle)
+                    || session.cwd.to_lowercase().contains(&needle)
+                    || session.model_provider.to_lowercase().contains(&needle)
+            });
+        }
+    }
+    // 与 commands 层历史一致的排序键：updated_at_ms desc, id desc
+    sessions.sort_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    // total = 过滤+排序后的总数（去重已在调用方完成）
+    let total = sessions.len() as i64;
+    // 不分页：直接返回全部
+    if limit <= 0 {
+        return PagedLocalSessions { sessions, total };
+    }
+    // 分页切片
+    let start = offset.clamp(0, total) as usize;
+    let end = (start.saturating_add(limit as usize)).min(total as usize);
+    let paged = if start >= total as usize {
+        Vec::new()
+    } else {
+        sessions.drain(start..end).collect()
+    };
+    PagedLocalSessions {
+        sessions: paged,
+        total,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SQLiteStorageAdapter {
     db_path: PathBuf,
@@ -78,6 +133,15 @@ pub struct LocalSession {
     pub updated_at_ms: Option<i64>,
     pub rollout_path: String,
     pub db_path: String,
+}
+
+/// 分页查询结果：当页会话列表 + 去重/过滤后的总数。
+/// 用于「会话管理」tab 的懒加载，避免一次性把上千条会话传到前端。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagedLocalSessions {
+    pub sessions: Vec<LocalSession>,
+    pub total: i64,
 }
 
 #[derive(Debug, Clone)]

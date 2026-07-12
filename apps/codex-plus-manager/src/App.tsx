@@ -21,6 +21,8 @@ import {
   ArrowLeft,
   Bell,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleArrowUp,
   Copy,
   Download,
@@ -42,6 +44,7 @@ import {
   RefreshCw,
   Rocket,
   Save,
+  Search,
   Settings,
   ShieldCheck,
   ShieldAlert,
@@ -325,6 +328,8 @@ type LocalSessionsResult = CommandResult<{
   dbPath: string;
   dbPaths: string[];
   sessions: LocalSession[];
+  // 去重/过滤后的总会话数（后端分页后，sessions.length 只是当页条数，total 才是全集）
+  total: number;
 }>;
 
 type ZedRemoteProject = {
@@ -731,6 +736,10 @@ export function App() {
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResult | null>(null);
   const [pendingProviderImport, setPendingProviderImport] = useState<ProviderImportRequest | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
+  // 会话管理分页状态：page 从 1 开始；searchQuery 为搜索关键词（防抖触发后端过滤）
+  const [sessionPage, setSessionPage] = useState(1);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const SESSION_PAGE_SIZE = 50;
   const [zedRemoteProjects, setZedRemoteProjects] = useState<ZedRemoteProjectsResult | null>(null);
   const [liveContextEntries, setLiveContextEntries] = useState<CodexContextEntries | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
@@ -945,12 +954,39 @@ export function App() {
     }
   };
 
-  const refreshLocalSessions = async (silent = false) => {
-    const result = await run(() => call<LocalSessionsResult>("list_local_sessions"));
-    if (result) {
-      setLocalSessions(result);
-      if (!silent || !isSuccessStatus(result.status)) showResultNotice(t("会话管理"), result, { silentSuccess: true });
+  // 刷新本地会话列表（带分页 + 搜索）。
+  // overrides 可在调用处临时覆盖页码/搜索词（例如搜索框改变时强制回第 1 页），
+  // 不传则使用当前 sessionPage / sessionSearchQuery state。
+  // 内部处理越界回退：若当页为空但总数 > 0 且 page > 1（删除导致），自动回到最后一页。
+  const refreshLocalSessions = async (
+    silent = false,
+    overrides?: { page?: number; query?: string },
+  ) => {
+    let page = overrides?.page ?? sessionPage;
+    const query = overrides?.query ?? sessionSearchQuery;
+    const trimmedQuery = query.trim();
+    const fetchPage = (targetPage: number) =>
+      call<LocalSessionsResult>("list_local_sessions", {
+        limit: SESSION_PAGE_SIZE,
+        offset: (targetPage - 1) * SESSION_PAGE_SIZE,
+        query: trimmedQuery || undefined,
+      });
+    let result = await run(() => fetchPage(page));
+    if (!result) return result;
+    // 越界回退：当页为空、但仍有数据、且不在第 1 页 —— 回到最后一页重查
+    if (result.sessions.length === 0 && result.total > 0 && page > 1) {
+      const lastPage = Math.max(1, Math.ceil(result.total / SESSION_PAGE_SIZE));
+      if (lastPage !== page) {
+        page = lastPage;
+        const fallback = await run(() => fetchPage(page));
+        // 回退查询失败时保留原 result（含空当页 + total），避免界面变成 null
+        if (fallback) result = fallback;
+      }
     }
+    setLocalSessions(result);
+    setSessionPage(page);
+    if (overrides && overrides.query !== undefined) setSessionSearchQuery(overrides.query);
+    if (!silent || !isSuccessStatus(result.status)) showResultNotice(t("会话管理"), result, { silentSuccess: true });
     return result;
   };
 
@@ -1113,6 +1149,8 @@ export function App() {
     }
     if (next === "sessions") {
       await refreshSettings(true);
+      // 切到「会话管理」时用当前 page/query 刷新；若当前页越界（会话被删），
+      // refreshLocalSessions 内部会依据返回 total 自动回退。
       await refreshLocalSessions(true);
       await refreshProviderSyncTargets(true);
     }
@@ -2093,6 +2131,9 @@ export function App() {
               selectedProviderSyncTarget={selectedProviderSyncTarget}
               onFormChange={setSettingsForm}
               actions={actions}
+              page={sessionPage}
+              pageSize={SESSION_PAGE_SIZE}
+              searchQuery={sessionSearchQuery}
             />
           ) : null}
           {route === "context" ? (
@@ -2213,7 +2254,7 @@ type Actions = {
   installMarketScript: (id: string) => Promise<void>;
   setUserScriptEnabled: (key: string, enabled: boolean) => Promise<void>;
   deleteUserScript: (key: string) => Promise<void>;
-  refreshLocalSessions: () => Promise<LocalSessionsResult | null>;
+  refreshLocalSessions: (silent?: boolean, overrides?: { page?: number; query?: string }) => Promise<LocalSessionsResult | null>;
   deleteLocalSession: (session: LocalSession) => Promise<void>;
   deleteLocalSessions: (sessions: LocalSession[]) => Promise<void>;
   refreshZedRemoteProjects: () => Promise<ZedRemoteProjectsResult | null>;
@@ -2900,6 +2941,9 @@ function SessionsScreen({
   selectedProviderSyncTarget,
   onFormChange,
   actions,
+  page,
+  pageSize,
+  searchQuery,
 }: {
   settings: SettingsResult | null;
   form: BackendSettings;
@@ -2909,16 +2953,32 @@ function SessionsScreen({
   selectedProviderSyncTarget: string;
   onFormChange: (value: BackendSettings) => void;
   actions: Actions;
+  page: number;
+  pageSize: number;
+  searchQuery: string;
 }) {
   const items = sessions?.sessions ?? [];
-  const activeCount = items.filter((item) => !item.archived).length;
-  const archivedCount = items.length - activeCount;
+  const total = sessions?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  // 搜索框本地输入态：初始与父级 searchQuery 同步；输入后 300ms 防抖触发后端查询
+  const [searchInput, setSearchInput] = useState(searchQuery);
   const selectedSessions = useMemo(() => items.filter((session) => selectedSessionIds.has(session.id)), [items, selectedSessionIds]);
   const selectedCount = selectedSessions.length;
   const allSelected = items.length > 0 && selectedCount === items.length;
+
+  // 搜索防抖：输入变化 300ms 后才真正请求后端，并强制回到第 1 页
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed === searchQuery) return; // 与当前查询一致则不重复请求
+    const timer = window.setTimeout(() => {
+      void actions.refreshLocalSessions(true, { page: 1, query: trimmed });
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
   useEffect(() => {
     const itemIds = new Set(items.map((session) => session.id));
@@ -2966,9 +3026,9 @@ function SessionsScreen({
         <CardHead title={t("会话管理")} detail={t("读取 Codex 本地 SQLite 会话库，会删除数据库记录和对应 rollout 文件")} />
         <CardContent>
           <div className="metric-list">
-            <Metric label={t("会话总数")} value={tf("{0} 个", [items.length])} />
-            <Metric label={t("未归档")} value={tf("{0} 个", [activeCount])} />
-            <Metric label={t("已归档")} value={tf("{0} 个", [archivedCount])} />
+            {/* total 是后端去重/过滤后的总会话数；分页后 items.length 只是当页条数 */}
+            <Metric label={t("会话总数")} value={tf("{0} 个", [total])} />
+            <Metric label={t("当前页")} value={tf("{0} / {1}", [page, totalPages])} />
             <Metric label={t("数据库")} value={sessions?.dbPath ?? "~/.codex/sqlite/*.db"} />
           </div>
           <div className="form-row">
@@ -3035,9 +3095,23 @@ function SessionsScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title={t("本地会话")} detail={items.length ? t("按更新时间倒序显示") : t("点击刷新会话读取本地数据库")} />
+        <CardHead title={t("本地会话")} detail={total ? t("按更新时间倒序显示，分页加载") : t("点击刷新会话读取本地数据库")} />
         <CardContent>
-          {items.length ? (
+          {/* 搜索框：受控输入 + 300ms 防抖，触发后端过滤并回第 1 页 */}
+          <div className="session-search">
+            <Search className="h-4 w-4" />
+            <input
+              className="session-search-input"
+              type="search"
+              placeholder={t("搜索会话（标题 / ID / 项目路径 / provider）")}
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.currentTarget.value)}
+            />
+            {searchInput ? (
+              <button className="session-search-clear" onClick={() => setSearchInput("")} title={t("清除")} type="button">×</button>
+            ) : null}
+          </div>
+          {total ? (
             <>
               <div className="session-list-toolbar">
                 <span className="session-selection-summary">{t("已选择")} {selectedCount} / {items.length} {t("个会话")}</span>
@@ -3087,9 +3161,33 @@ function SessionsScreen({
                   );
                 })}
               </div>
+              {/* 分页控件：上一页 / 当前页 / 下一页 + 总数 */}
+              <div className="session-pagination">
+                <Button
+                  disabled={page <= 1}
+                  onClick={() => void actions.refreshLocalSessions(true, { page: page - 1 })}
+                  size="sm"
+                  variant="outline"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  {t("上一页")}
+                </Button>
+                <span className="session-pagination-info">
+                  {t("第")} {page} / {totalPages} {t("页")} · {t("共")} {total} {t("条")}
+                </span>
+                <Button
+                  disabled={page >= totalPages}
+                  onClick={() => void actions.refreshLocalSessions(true, { page: page + 1 })}
+                  size="sm"
+                  variant="outline"
+                >
+                  {t("下一页")}
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </>
           ) : (
-            <div className="empty">{t("未读取到本地会话，或当前 SQLite 会话库不存在。")}</div>
+            <div className="empty">{searchQuery ? t("没有匹配的会话。") : t("未读取到本地会话，或当前 SQLite 会话库不存在。")}</div>
           )}
         </CardContent>
       </Panel>

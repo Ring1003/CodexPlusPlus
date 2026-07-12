@@ -2483,6 +2483,94 @@ body:has(.light) {
   justify-content: flex-end;
 }
 
+/* 会话搜索框：液态玻璃风格，与 .select-input 保持一致 */
+.session-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid hsl(var(--glass-tint) / var(--glass-border-alpha));
+  border-radius: 12px;
+  background: hsl(var(--surface-raised) / 0.55);
+  backdrop-filter: blur(10px) saturate(1.4);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  padding: 0 14px;
+  margin-bottom: 12px;
+  box-shadow: inset 0 1px 2px hsl(222 40% 4% / 0.2);
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
+}
+
+.session-search:focus-within {
+  border-color: hsl(var(--accent) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--accent) / 0.18), inset 0 1px 2px hsl(222 40% 4% / 0.2);
+}
+
+.session-search > svg {
+  color: hsl(var(--muted-foreground));
+  flex-shrink: 0;
+}
+
+.session-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  outline: none;
+}
+
+.session-search-input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.session-search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.session-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: hsl(var(--muted-foreground) / 0.2);
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+
+.session-search-clear:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* 分页控件 */
+.session-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.session-pagination-info {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .session-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, auto) auto;

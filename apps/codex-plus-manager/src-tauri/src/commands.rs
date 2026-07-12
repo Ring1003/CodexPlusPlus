@@ -107,6 +107,9 @@ pub struct LocalSessionsPayload {
     pub db_path: String,
     pub db_paths: Vec<String>,
     pub sessions: Vec<codex_plus_data::LocalSession>,
+    /// 去重/过滤后的总会话数（与当页 sessions.length 可能不同）。
+    /// 前端用它显示「共 N 条」并计算分页总数。全量模式（不分页）下等于 sessions.length。
+    pub total: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -633,7 +636,11 @@ pub fn dismiss_pending_provider_import() -> CommandResult<PendingProviderImportP
 }
 
 #[tauri::command]
-pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
+pub fn list_local_sessions(
+    limit: Option<i64>,
+    offset: Option<i64>,
+    query: Option<String>,
+) -> CommandResult<LocalSessionsPayload> {
     let home = codex_plus_core::codex_sqlite::default_codex_home_dir();
     let db_paths = codex_plus_core::codex_sqlite::codex_session_db_paths_from_home(&home);
     let mut sessions = Vec::new();
@@ -648,14 +655,18 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
             Err(_) => {}
         }
     }
-    sessions.sort_by(|left, right| {
-        right
-            .updated_at_ms
-            .cmp(&left.updated_at_ms)
-            .then_with(|| right.id.cmp(&left.id))
-    });
+    // 去重必须在分页前完成：否则跨 db 的重复项会导致 total 偏大、分页错位。
+    // 排序移到 paginate_local_sessions 内部统一处理。
     let mut seen_session_ids = std::collections::HashSet::new();
     sessions.retain(|session| seen_session_ids.insert(session.id.clone()));
+
+    // 分页 + 过滤（opt-in）：limit/offset 同时给出才分页，否则全量（向后兼容）。
+    let paged = codex_plus_data::paginate_local_sessions(
+        sessions,
+        limit.unwrap_or(0),
+        offset.unwrap_or(0),
+        query.as_deref(),
+    );
     let payload = LocalSessionsPayload {
         db_path: db_paths
             .first()
@@ -665,11 +676,12 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
             .iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
-        sessions,
+        sessions: paged.sessions,
+        total: paged.total,
     };
     if errors.is_empty() {
         ok(
-            &format!("已读取 {} 个本地会话。", payload.sessions.len()),
+            &format!("已读取 {} 个本地会话。", payload.total),
             payload,
         )
     } else {
