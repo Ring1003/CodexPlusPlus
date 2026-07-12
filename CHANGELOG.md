@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.0.4 - 2026-07-12
+
+校准国内三家头部厂商 Coding Plan 预设的官方信息。
+
+- **智谱 GLM**：默认模型 `glm-5.1` → `glm-5.2`（2026/6/13 全量开放给 Coding Plan 用户，支持 1M 上下文）；模型列表补全 glm-5 / glm-4.7 / glm-4.6；apiKeyUrl 改为 GLM Coding 官方页。Base URL `https://open.bigmodel.cn/api/coding/paas/v4`（Coding Plan 专用端点）保持不变。
+- **Kimi Code**：从开放平台按量计费端点修正为 **Kimi Code 会员权益（Coding Plan）专用端点** `https://api.kimi.com/coding/v1`；模型改为官方统一的 `kimi-for-coding`（+高速版 `kimi-for-coding-highspeed`），后端随官方旗舰模型自动升级。名称从 "Kimi" 改为 "Kimi Code"。
+- **DeepSeek**：核对无误，保持不变（base_url `https://api.deepseek.com`，模型 `deepseek-v4-flash` / `deepseek-v4-pro`，V4 支持 1M 上下文，兼容 OpenAI ChatCompletions）。
+
 ## 1.0.3 - 2026-07-12
 
 cc-switch 共存兼容功能版本，在与 cc-switch 同时管理 codex 时提供感知与回滚能力。
