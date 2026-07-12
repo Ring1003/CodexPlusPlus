@@ -184,23 +184,6 @@ scripts/installer/
   macos/package-dmg.sh          macOS DMG packager
 ```
 
-## Community and Support
-
-Join the Codex++ discussion group to report issues, share usage notes, or suggest features:
-
-WeChat group: [get the latest QR code](https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#).
-
-If Codex++ has helped you, you can buy me a coffee or send a small tip to support continued maintenance.
-
-<p align="center">
-  <img src="docs/images/sponsor-alipay.jpg" alt="Alipay sponsor QR code" width="220">
-  <img src="docs/images/sponsor-wechat.jpg" alt="WeChat sponsor QR code" width="220">
-</p>
-
-## Friendly Links
-
-- [LINUX DO](https://linux.do)
-
 ## License
 
 Copyright (C) 2026 BigPizzaV3
