@@ -25,3 +25,7 @@ tools/codex-wechat/config.local.json
 pnpm-lock.yaml
 pnpm-workspace.yaml
 
+# 本地备份文件（净化操作产生的 .bak-日期 / .removed-日期 备份，不入库）
+*.bak-*
+*.removed-*
+
