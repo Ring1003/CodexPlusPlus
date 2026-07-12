@@ -3570,7 +3570,8 @@ mod tests {
         unsafe {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
-        let result = list_local_sessions();
+        // 全量调用（不分页）：limit/offset/query 都传 None，走向后兼容的全量路径
+        let result = list_local_sessions(None, None, None);
         restore_codex_home(previous_codex_home);
 
         assert_eq!(result.status, "ok");
