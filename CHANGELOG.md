@@ -1,5 +1,19 @@
 # 更新日志
 
+## 1.0.5 - 2026-07-12
+
+把更新机制从「下载全量安装包重新安装」改为 Tauri 官方 updater 在线升级。
+
+- **在线升级**：检测到新版本后，直接在后台下载更新并自动安装，无需手动走安装向导。
+- **自动重启**：更新安装完成后自动重启 manager 应用，重启后即生效为新版本。
+- **真实下载进度**：前端进度条改为监听后端真实下载字节进度事件，不再是假进度。
+- **ed25519 签名校验**：更新包用 Tauri 自带 ed25519 签名（免费，非系统代码签名），客户端校验签名防篡改。
+- **launcher 作为 sidecar**：launcher (codex-plus-plus) 改为 manager 的 Tauri sidecar (externalBin) 打进同一个安装包，companion 路径解析适配 sidecar triple 后缀。
+- **CI 改用 Tauri bundler**：Windows/macOS 构建从手写 NSIS/DMG 脚本迁移到 `tauri build`，latest.json 改为 Tauri updater 标准格式（含 platforms/signature/pub_date）。
+- 文案：「下载并运行安装包」→「在线升级」。
+
+注意：本次改动不考虑存量用户迁移（安装目录结构变化）。新版本首次需手动下载安装一次，之后即可在线升级。
+
 ## 1.0.4 - 2026-07-12
 
 校准国内三家头部厂商 Coding Plan 预设的官方信息。

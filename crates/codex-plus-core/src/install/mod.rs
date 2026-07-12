@@ -250,11 +250,50 @@ pub fn companion_binary_path_from_exe(exe: &Path, binary: &str) -> PathBuf {
     if let Some(bundle_binary) = macos_companion_binary_from_exe(exe, binary) {
         return bundle_binary;
     }
+    // 1. 优先找无 triple 后缀的同目录兄弟（传统安装方式）
     let same_bundle = dir.join(binary);
     if same_bundle.exists() {
         return same_bundle;
     }
+    // 2. Tauri sidecar fallback：找带 target triple 后缀的版本
+    //    sidecar 文件名格式：<binary>-<target-triple>[.exe]
+    //    例如 codex-plus-plus-aarch64-apple-darwin / codex-plus-plus-x86_64-pc-windows-msvc.exe
+    if let Some(sidecar_path) = find_sidecar_binary(dir, binary, suffix) {
+        return sidecar_path;
+    }
     dir.join(format!("{binary}{suffix}"))
+}
+
+/// 在目录下查找 Tauri sidecar 二进制（带 target triple 后缀）。
+/// Tauri externalBin 打包后会按 host triple 重命名，运行时通过本函数回退定位。
+/// triple 格式如：aarch64-apple-darwin / x86_64-pc-windows-msvc
+fn find_sidecar_binary(dir: &Path, binary: &str, suffix: &str) -> Option<PathBuf> {
+    let prefix = format!("{binary}-");
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else { continue };
+        // 匹配 <binary>-<triple>[.exe]
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let after_prefix = name.strip_prefix(&prefix).unwrap_or("");
+        // triple 含连字符（如 arch-vendor-os）；排除 .sig/.txt 等非二进制
+        if suffix.is_empty() {
+            // 非 Windows：完整文件名就是 <binary>-<triple>，无扩展名
+            if after_prefix.contains('-') && !after_prefix.contains('.') {
+                return Some(entry.path());
+            }
+        } else {
+            // Windows：<binary>-<triple>.exe
+            if let Some(triple) = after_prefix.strip_suffix(suffix) {
+                if triple.contains('-') {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> {

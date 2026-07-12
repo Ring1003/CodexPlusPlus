@@ -12,6 +12,7 @@ use codex_plus_core::status::{LaunchStatus, StatusStore};
 use codex_plus_core::user_scripts::UserScriptManager;
 use codex_plus_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::Serialize;
+use tauri::Emitter;
 use serde_json::{Value, json};
 
 use crate::install::{self, InstallActionResult, InstallOptions};
@@ -1603,36 +1604,88 @@ pub async fn check_update() -> CommandResult<Value> {
 
 #[tauri::command]
 pub async fn perform_update(
+    app: tauri::AppHandle,
+    webview: tauri::WebviewWindow,
     release: Option<codex_plus_core::update::Release>,
 ) -> CommandResult<Value> {
-    let Some(release) = release else {
-        return failed(
-            "请先检查更新并选择可下载的 Release asset。",
-            json!({
-                "currentVersion": codex_plus_core::version::VERSION,
-                "progress": 0
-            }),
-        );
+    // 走 Tauri 官方 updater：在线下载 + 自动安装 + 自动重启
+    // release 参数保留兼容旧前端调用，但实际用 Tauri updater 的 check 结果
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(error) => {
+            return failed(
+                &format!("初始化更新器失败：{error}"),
+                json!({
+                    "currentVersion": codex_plus_core::version::VERSION,
+                    "progress": 0
+                }),
+            );
+        }
     };
-    let download_dir = codex_plus_core::paths::default_app_state_dir().join("updates");
-    match codex_plus_core::update::perform_update(&release, &download_dir).await {
-        Ok(result) => ok(
-            "安装包已下载并启动，请按安装向导完成更新。",
-            json!({
-                "currentVersion": codex_plus_core::version::VERSION,
-                "latestVersion": result.release.version,
-                "releaseSummary": result.release.body,
-                "installedPath": result.installer_path.to_string_lossy(),
-                "launched": result.launched,
-                "progress": 100
-            }),
-        ),
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            return ok(
+                "当前已是最新版本，无需更新。",
+                json!({
+                    "currentVersion": codex_plus_core::version::VERSION,
+                    "progress": 100,
+                    "upToDate": true
+                }),
+            );
+        }
+        Err(error) => {
+            return failed(
+                &format!("检查可用更新失败：{error}"),
+                json!({
+                    "currentVersion": codex_plus_core::version::VERSION,
+                    "progress": 0
+                }),
+            );
+        }
+    };
+    let latest_version = update.version().clone();
+    // 边下载边推送真实进度事件给前端
+    let download_webview = webview.clone();
+    match update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                // 累计已下载字节数，通过事件推送给前端展示真实进度条
+                let _ = download_webview.emit("update-download-progress", json!({
+                    "chunkLength": chunk_length,
+                    "contentLength": content_length,
+                }));
+            },
+            || {
+                // 下载完成回调
+            },
+        )
+        .await
+    {
+        Ok(()) => {
+            // download_and_install 成功后，Tauri updater 已安装好更新；
+            // 调用 app.restart() 自动重启，让新版本生效
+            // 注意：restart 会终止当前进程，下面的 ok 可能来不及返回，
+            // 但保留它以防 restart 未立即生效。
+            let _ = webview.emit("update-installed", json!({ "version": latest_version }));
+            app.restart();
+            ok(
+                "更新已安装，应用即将自动重启。",
+                json!({
+                    "currentVersion": codex_plus_core::version::VERSION,
+                    "latestVersion": latest_version,
+                    "progress": 100,
+                    "installed": true,
+                    "launched": true
+                }),
+            )
+        }
         Err(error) => failed(
-            &format!("安装更新失败：{error}"),
+            &format!("下载并安装更新失败：{error}"),
             json!({
                 "currentVersion": codex_plus_core::version::VERSION,
-                "latestVersion": release.version,
-                "releaseSummary": release.body,
+                "latestVersion": latest_version,
                 "progress": 0
             }),
         ),

@@ -1357,6 +1357,7 @@ export function App() {
 
   const performUpdate = async () => {
     if (updateInstallProgress.active) return;
+    // release 参数保留兼容，实际走 Tauri updater 在线升级（后端 check + download_and_install）
     const release =
       update?.latestVersion && update.assetName && update.assetUrl
         ? {
@@ -1369,41 +1370,44 @@ export function App() {
         : null;
     setUpdateInstallProgress({
       active: true,
-      percent: 8,
-      message: t("正在准备安装包下载…"),
+      percent: 0,
+      message: t("正在检查可用更新…"),
     });
-    const progressTimer = window.setInterval(() => {
-      setUpdateInstallProgress((current) => {
-        if (!current.active) return current;
-        const nextPercent = Math.min(92, current.percent + 10);
-        const message =
-          nextPercent < 32
-            ? t("正在获取 GitHub Release 信息…")
-            : nextPercent < 72
-              ? t("正在下载安装包…")
-              : t("正在启动安装包…");
-        return { ...current, percent: nextPercent, message };
-      });
-    }, 500);
+    // 监听真实下载进度事件（后端 perform_update 通过 emit 推送）
+    let totalBytes = 0;
+    let downloadedBytes = 0;
+    const unlisten = await listen<{ chunkLength: number; contentLength: number | null }>(
+      "update-download-progress",
+      (event) => {
+        downloadedBytes += event.payload.chunkLength;
+        if (event.payload.contentLength && totalBytes === 0) {
+          totalBytes = event.payload.contentLength;
+        }
+        const percent = totalBytes > 0 ? Math.min(99, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
+        setUpdateInstallProgress((current) =>
+          current.active ? { ...current, percent, message: t("正在在线下载更新…") } : current,
+        );
+      },
+    );
     try {
       const result = await run(() => call<UpdateResult>("perform_update", { release }));
       if (result) {
         setUpdate(result);
         setUpdateInstallProgress({
           active: false,
-          percent: result.progress ?? 100,
+          percent: 100,
           message: result.message,
         });
-        showNotice(t("更新安装"), result.message, result.status);
+        showNotice(t("在线升级"), result.message, result.status);
       } else {
         setUpdateInstallProgress({
           active: false,
-          percent: 100,
-          message: t("安装包更新失败，请查看错误提示后重试。"),
+          percent: 0,
+          message: t("在线升级失败，请查看错误提示后重试。"),
         });
       }
     } finally {
-      window.clearInterval(progressTimer);
+      unlisten();
     }
   };
 
@@ -3436,7 +3440,7 @@ function AboutScreen({
           <Toolbar>
             <Button onClick={() => void actions.checkUpdate()}>{t("检查更新")}</Button>
             <Button disabled={updateInstallProgress.active} variant="secondary" onClick={() => void actions.performUpdate()}>
-              {updateInstallProgress.active ? t("正在下载安装包…") : t("下载并运行安装包")}
+              {updateInstallProgress.active ? t("正在在线升级…") : t("在线升级")}
             </Button>
           </Toolbar>
         </CardContent>

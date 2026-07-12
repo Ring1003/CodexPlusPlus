@@ -17,11 +17,15 @@ permissions:
 
 # 统一的 tag 取值：release 事件用 release.tag_name，手动触发用 inputs.tag。
 # 这样两种触发方式都能正确拿到目标 tag，job 内部统一引用 RELEASE_TAG 环境变量。
+# v1.0.5+ 改用 Tauri 官方 bundler + updater：在线升级 + ed25519 签名 + 自动重启。
+# launcher (codex-plus-plus) 作为 manager 的 sidecar 打进 bundle。
 jobs:
   windows-installer:
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -36,45 +40,43 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NSIS
-        run: choco install nsis -y
-
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
         run: npm install --package-lock=false
 
-      - name: Build frontend
-        working-directory: apps/codex-plus-manager
-        run: npm run vite:build
-
-      - name: Build binaries
-        run: cargo build --release
-
-      - name: Stage Windows app files
+      - name: Build launcher (codex-plus-plus) as sidecar
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/windows/app | Out-Null
-          Copy-Item target/release/codex-plus-plus.exe dist/windows/app/
-          Copy-Item target/release/codex-plus-plus-manager.exe dist/windows/app/
+          # 单独编译 launcher 二进制，然后重命名为 Tauri sidecar 要求的带 triple 后缀的文件名
+          cargo build --release -p codex-plus-plus
+          $sidecarDir = "apps/codex-plus-manager/src-tauri"
+          New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
+          # Tauri externalBin 会在运行时找 codex-plus-plus-x86_64-pc-windows-msvc.exe
+          Copy-Item "target/release/codex-plus-plus.exe" "$sidecarDir/codex-plus-plus-x86_64-pc-windows-msvc.exe" -Force
 
-      - name: Build Windows zip asset
+      - name: Build manager with Tauri bundler (NSIS + signature)
+        working-directory: apps/codex-plus-manager
+        shell: pwsh
+        run: |
+          # tauri build 会：编译 manager → 前端 build → 打 NSIS bundle → 用 ed25519 私钥签名产 .sig
+          npx @tauri-apps/cli build
+
+      - name: Stage Windows artifacts
         shell: pwsh
         run: |
           $version = "${env:RELEASE_TAG}".TrimStart("v", "V")
           New-Item -ItemType Directory -Force dist/windows | Out-Null
-          Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/CodexPlusPlus-$version-windows-x64.zip" -Force
-
-      - name: Build Windows installer
-        shell: pwsh
-        run: |
-          $version = "${env:RELEASE_TAG}".TrimStart("v", "V")
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) {
-            $makensis = "makensis"
+          # Tauri NSIS 产物路径
+          $nsisExe = Get-ChildItem "target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if ($nsisExe) {
+            Copy-Item $nsisExe.FullName "dist/windows/"
           }
-          Push-Location scripts/installer/windows
-          & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" CodexPlusPlus.nsi
-          Pop-Location
+          # 签名文件 .sig（Tauri updater 校验用）
+          $sigFile = Get-ChildItem "target/release/bundle/nsis/*.sig" | Select-Object -First 1
+          if ($sigFile) {
+            Copy-Item $sigFile.FullName "dist/windows/"
+          }
+          Get-ChildItem dist/windows/
 
       - name: Upload Windows installer
         uses: softprops/action-gh-release@v2
@@ -82,13 +84,15 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/windows/*.exe
-            dist/windows/*.zip
+            dist/windows/*.sig
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -119,53 +123,43 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm install --package-lock=false
 
-      - name: Build frontend
+      - name: Build launcher as sidecar
+        run: |
+          # 编译 launcher 并重命名为 sidecar 文件名
+          cargo build --release --target ${{ matrix.target }} -p codex-plus-plus
+          sidecar_dir="apps/codex-plus-manager/src-tauri"
+          mkdir -p "$sidecar_dir"
+          cp "target/${{ matrix.target }}/release/codex-plus-plus" "$sidecar_dir/codex-plus-plus-${{ matrix.target }}"
+
+      - name: Build manager with Tauri bundler (DMG + app.tar.gz + signature)
         working-directory: apps/codex-plus-manager
-        run: npm run vite:build
+        run: |
+          # tauri build 会产 .app、.dmg、.app.tar.gz（updater 用）+ .sig 签名
+          npx @tauri-apps/cli build --target ${{ matrix.target }}
 
-      - name: Build binaries
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build macOS DMG
+      - name: Stage macOS artifacts
         run: |
           VERSION="${RELEASE_TAG#v}"
           VERSION="${VERSION#V}"
-          BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
+          mkdir -p dist/macos
+          # Tauri 产物路径
+          cp target/${{ matrix.target }}/release/bundle/dmg/*.dmg "dist/macos/CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.dmg" 2>/dev/null || true
+          # updater 用的 .app.tar.gz + .sig
+          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz "dist/macos/" 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig "dist/macos/" 2>/dev/null || true
+          ls -la dist/macos/
 
-      - name: Build macOS zip asset
-        shell: bash
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          VERSION="${VERSION#V}"
-          mkdir -p dist/macos/app-${{ matrix.arch }}
-          cp "target/${{ matrix.target }}/release/codex-plus-plus" "dist/macos/app-${{ matrix.arch }}/"
-          cp "target/${{ matrix.target }}/release/codex-plus-plus-manager" "dist/macos/app-${{ matrix.arch }}/"
-          (cd dist/macos && zip -r "CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.zip" "app-${{ matrix.arch }}")
-
-      - name: Verify macOS bundle structure
-        run: |
-          set -euo pipefail
-          test -L "dist/macos/stage/Applications"
-          test "$(readlink "dist/macos/stage/Applications")" = "/Applications"
-          for app in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
-            test -f "$app/Contents/Info.plist"
-            test -f "$app/Contents/PkgInfo"
-            test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-            plutil -lint "$app/Contents/Info.plist" >/dev/null
-            codesign -dv "$app" >/dev/null 2>&1
-            echo "verified: $app"
-          done
-
-      - name: Upload macOS DMG
+      - name: Upload macOS DMG and updater artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/macos/*.dmg
-            dist/macos/*.zip
+            dist/macos/*.app.tar.gz
+            dist/macos/*.app.tar.gz.sig
 
   latest-json:
-    name: Upload static latest.json
+    name: Upload static latest.json (Tauri updater format)
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -173,7 +167,7 @@ jobs:
       - windows-installer
       - macos-dmg
     steps:
-      - name: Generate latest.json
+      - name: Generate latest.json (Tauri updater format)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -181,7 +175,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,url > release.json
+          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,publishedAt > release.json
           node <<'NODE'
           const fs = require("fs");
           const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
@@ -189,19 +183,61 @@ jobs:
           const tag = release.tagName || process.env.TAG;
           const version = tag.replace(/^v/i, "");
           const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
-          const assets = (release.assets || [])
-            .map((asset) => asset.name)
-            .filter((name) => name !== "latest.json")
-            .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
+          const assets = release.assets || [];
+
+          // 读 .sig 签名文件内容（Tauri updater 要求 signature 是文件内容字符串）
+          function readSignature(sigAssetName) {
+            const sig = assets.find((a) => a.name === sigAssetName);
+            if (!sig) return null;
+            // 通过 gh api 下载 .sig 文件内容
+            try {
+              const { execSync } = require("child_process");
+              const url = `repos/${process.env.REPO}/releases/assets/${sig.id}`;
+              const content = execSync(`gh api ${url} --jq '.content'`, { encoding: "utf8" }).trim();
+              return Buffer.from(content, "base64").toString("utf8").trim();
+            } catch (e) {
+              console.error(`Failed to read signature ${sigAssetName}: ${e.message}`);
+              return null;
+            }
+          }
+
+          function findAsset(predicate) {
+            return assets.find(predicate);
+          }
+
+          // Windows: NSIS exe + .sig
+          const winExe = findAsset((a) => a.name.endsWith("-x64-setup.exe") || a.name.endsWith(".exe") && !a.name.endsWith(".sig"));
+          const winSig = winExe ? assets.find((a) => a.name === winExe.name + ".sig") : null;
+          // macOS arm64: .app.tar.gz + .sig
+          const macArmGz = findAsset((a) => a.name.includes("aarch64") || a.name.includes("arm64") && a.name.endsWith(".app.tar.gz"));
+          const macArmSig = macArmGz ? assets.find((a) => a.name === macArmGz.name + ".sig") : null;
+          // macOS x64: .app.tar.gz + .sig
+          const macX64Gz = findAsset((a) => a.name.includes("x86_64") || a.name.includes("x64") && a.name.endsWith(".app.tar.gz"));
+          const macX64Sig = macX64Gz ? assets.find((a) => a.name === macX64Gz.name + ".sig") : null;
+
+          const platforms = {};
+          if (winExe && winSig) {
+            const sig = readSignature(winSig.name);
+            if (sig) platforms["windows-x86_64"] = { signature: sig, url: `${baseUrl}/${winExe.name}` };
+          }
+          if (macArmGz && macArmSig) {
+            const sig = readSignature(macArmSig.name);
+            if (sig) platforms["darwin-aarch64"] = { signature: sig, url: `${baseUrl}/${macArmGz.name}` };
+          }
+          if (macX64Gz && macX64Sig) {
+            const sig = readSignature(macX64Sig.name);
+            if (sig) platforms["darwin-x86_64"] = { signature: sig, url: `${baseUrl}/${macX64Gz.name}` };
+          }
+
           const payload = {
-            version: `v${version}`,
-            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
-            body: release.body || "",
-            assets
+            version: version,
+            notes: release.body || "",
+            pub_date: release.publishedAt || new Date().toISOString(),
+            platforms
           };
           fs.writeFileSync("latest.json", `${JSON.stringify(payload, null, 2)}\n`);
+          console.log(JSON.stringify(payload, null, 2));
           NODE
-          cat latest.json
 
       - name: Upload latest.json
         env:
