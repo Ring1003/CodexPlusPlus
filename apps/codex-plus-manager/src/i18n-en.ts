@@ -18,6 +18,20 @@ export const EN_PLAIN: Record<string, string> = {
   "Codex 目标": "Codex goals",
   "Codex++ 导入": "Codex++ import",
   "Codex++ 版本": "Codex++ version",
+  "CodexPlusPlus 的部分设置（上下文窗口、压缩阈值、catalog 指针等）可能已被 cc-switch 覆盖。":
+    "Some CodexPlusPlus settings (context window, compaction threshold, catalog pointer, etc.) may have been overwritten by cc-switch.",
+  "cc-switch 兼容感知": "cc-switch compat awareness",
+  "默认关闭；开启后检测 cc-switch 对 codex 配置的修改，并在被覆盖后允许回滚到上次 CodexPlusPlus 写入前的状态。":
+    "Off by default. When enabled, detects modifications by cc-switch to codex config and allows rolling back to the state before the last CodexPlusPlus write after an overwrite.",
+  "检测到 cc-switch 可能修改了 codex 配置":
+    "cc-switch may have modified the codex config",
+  "可回滚到上次 CodexPlusPlus 写入前的状态。":
+    "You can roll back to the state before the last CodexPlusPlus write.",
+  "回滚到上次写入": "Roll back to last write",
+  "回滚": "Roll back",
+  "已回滚到指定备份，config.toml 与 auth.json 已恢复。":
+    "Rolled back to the specified backup; config.toml and auth.json have been restored.",
+  "刷新检测": "Re-run detection",
   "Codex增强": "Codex enhancements",
   "Codex增强模式": "Codex enhancement mode",
   "Debug 端口": "Debug port",

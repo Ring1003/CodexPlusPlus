@@ -3314,3 +3314,177 @@ experimental_bearer_token = "sk-new"
     );
     assert!(!windows.contains_key("deepseek-v4-pro"));
 }
+
+// ===========================================================================
+// cc-switch 兼容感知与回滚功能的测试（v1.0.3 新增）
+// ===========================================================================
+
+use codex_plus_core::relay_config::{
+    create_live_backup_with_metadata, list_live_backups, relay_status_from_home,
+    relay_status_from_home_with_compat, rollback_to_backup_in_home,
+};
+
+/// helper：构造一个临时 codex home 并写入初始 config.toml
+fn make_test_home_with_config() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("创建临时目录失败");
+    let home = temp.path();
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        "model = \"gpt-5\"\nmodel_provider = \"custom\"\n",
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn relay_status_from_home_defaults_external_manager_detected_false() {
+    // 默认（compat 关闭）external_manager_detected 应恒为 false
+    let temp = make_test_home_with_config();
+    let status = relay_status_from_home(temp.path());
+    assert!(
+        !status.external_manager_detected,
+        "compat 关闭时 external_manager_detected 必须为 false"
+    );
+}
+
+#[test]
+fn relay_status_from_home_with_compat_detects_cc_switch_sentinel() {
+    // 开启 compat，且 config 含 cc-switch catalog sentinel → 应检测到
+    let temp = tempfile::tempdir().expect("创建临时目录失败");
+    let home = temp.path();
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        "model = \"x\"\nmodel_catalog_json = \"cc-switch-model-catalog.json\"\n",
+    )
+    .unwrap();
+
+    let status = relay_status_from_home_with_compat(home, true);
+    assert!(
+        status.external_manager_detected,
+        "含 cc-switch catalog sentinel 时应检测到外部管理"
+    );
+}
+
+#[test]
+fn create_live_backup_with_metadata_writes_metadata_json() {
+    let temp = make_test_home_with_config();
+    let home = temp.path();
+    let backup_path = create_live_backup_with_metadata(
+        home,
+        Some(b"model = \"old\"\n"),
+        Some(b"{\"OPENAI_API_KEY\":\"sk-old\"}"),
+        "switch",
+    )
+    .expect("创建带元数据备份失败")
+    .expect("应返回备份路径");
+
+    let backup_dir = std::path::PathBuf::from(&backup_path);
+    assert!(backup_dir.join("config.toml").exists());
+    assert!(backup_dir.join("auth.json").exists());
+    assert!(backup_dir.join("metadata.json").exists());
+
+    let metadata_text = std::fs::read_to_string(backup_dir.join("metadata.json")).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).unwrap();
+    assert_eq!(metadata["managedBy"], "CodexPlusPlus");
+    assert_eq!(metadata["trigger"], "switch");
+    assert_eq!(metadata["version"], 1);
+}
+
+#[test]
+fn list_live_backups_returns_entries_newest_first() {
+    let temp = make_test_home_with_config();
+    let home = temp.path();
+
+    // 创建两个备份，间隔一点时间
+    let _first = create_live_backup_with_metadata(
+        home,
+        Some(b"model = \"a\"\n"),
+        None,
+        "switch",
+    )
+    .unwrap()
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let _second = create_live_backup_with_metadata(
+        home,
+        Some(b"model = \"b\"\n"),
+        None,
+        "apply",
+    )
+    .unwrap()
+    .unwrap();
+
+    let entries = list_live_backups(home).expect("列出备份失败");
+    assert_eq!(entries.len(), 2);
+    // 倒序：最新的在前
+    assert_eq!(entries[0].trigger, "apply");
+    assert_eq!(entries[1].trigger, "switch");
+    assert!(entries[0].created_at_millis >= entries[1].created_at_millis);
+}
+
+#[test]
+fn rollback_to_backup_restores_config_and_auth() {
+    let temp = make_test_home_with_config();
+    let home = temp.path();
+
+    // 创建一个备份（内容是「旧版本」）
+    let backup_path = create_live_backup_with_metadata(
+        home,
+        Some(b"model = \"old-version\"\n"),
+        Some(b"{\"OPENAI_API_KEY\":\"sk-old\"}"),
+        "switch",
+    )
+    .unwrap()
+    .unwrap();
+
+    // 模拟外部修改：把 live 改成「新版本」
+    std::fs::write(home.join("config.toml"), "model = \"external-modified\"\n").unwrap();
+
+    // 回滚
+    let result = rollback_to_backup_in_home(home, &backup_path).expect("回滚失败");
+
+    // 验证 live 已恢复为「旧版本」
+    let restored = std::fs::read_to_string(home.join("config.toml")).unwrap();
+    assert!(
+        restored.contains("old-version"),
+        "回滚后 config.toml 应为旧版本，实际：{restored}"
+    );
+    let restored_auth = std::fs::read_to_string(home.join("auth.json")).unwrap();
+    assert!(restored_auth.contains("sk-old"));
+
+    // 回滚前应自动创建「回滚前快照」备份
+    let backups = list_live_backups(home).unwrap();
+    let has_rollback_pre = backups.iter().any(|e| e.trigger == "rollback-pre");
+    assert!(has_rollback_pre, "回滚前应创建 rollback-pre 备份");
+}
+
+#[test]
+fn rollback_rejects_path_outside_backups_dir() {
+    let temp = make_test_home_with_config();
+    let home = temp.path();
+
+    // 试图用一个 backups 目录外的路径回滚 → 应失败
+    let rogue_path = home.join("evil-backup").to_string_lossy().to_string();
+    std::fs::create_dir_all(&rogue_path).unwrap();
+    std::fs::write(std::path::PathBuf::from(&rogue_path).join("config.toml"), "x").unwrap();
+
+    let result = rollback_to_backup_in_home(home, &rogue_path);
+    assert!(result.is_err(), "backups 目录外的路径应被拒绝");
+}
+
+#[test]
+fn rollback_fails_when_backup_empty() {
+    let temp = make_test_home_with_config();
+    let home = temp.path();
+
+    // 创建一个空备份目录（无 config/auth）
+    let empty_backup = home
+        .join("backups")
+        .join("codex-plus-live-empty");
+    std::fs::create_dir_all(&empty_backup).unwrap();
+
+    let result = rollback_to_backup_in_home(home, empty_backup.to_str().unwrap());
+    assert!(result.is_err(), "空备份目录应回滚失败");
+}

@@ -1,6 +1,7 @@
 pub mod app_paths;
 pub mod assets;
 pub mod bridge;
+pub mod cc_switch_detect;
 pub mod ccs_import;
 pub mod cdp;
 pub mod codex_home;
@@ -35,6 +36,7 @@ pub mod upstream_worktree;
 pub mod user_scripts;
 pub mod version;
 pub mod watcher;
+pub mod write_fingerprint;
 #[cfg(windows)]
 mod windows_integration;
 pub mod zed_remote;

@@ -110,6 +110,8 @@ pub fn run() {
             commands::apply_relay_injection,
             commands::apply_pure_api_injection,
             commands::clear_relay_injection,
+            commands::rollback_to_backup,
+            commands::list_live_backups,
             manager_exit_app,
             manager_hide_to_tray,
             update_tray_labels

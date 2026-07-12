@@ -317,6 +317,9 @@ pub struct BackendSettings {
     pub active_aggregate_relay_id: String,
     #[serde(rename = "relayTestModel", default = "default_relay_test_model")]
     pub relay_test_model: String,
+    #[serde(rename = "ccSwitchCompatEnabled", default)]
+    /// cc-switch 兼容感知开关：开启后检测外部工具对 codex 配置的修改并允许回滚
+    pub cc_switch_compat_enabled: bool,
 }
 
 impl Default for BackendSettings {
@@ -376,6 +379,7 @@ impl Default for BackendSettings {
             aggregate_relay_profiles: Vec::new(),
             active_aggregate_relay_id: String::new(),
             relay_test_model: default_relay_test_model(),
+            cc_switch_compat_enabled: false,
         }
     }
 }
@@ -975,6 +979,7 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
             }),
         );
     }
+    merge_bool_setting(target, source, "ccSwitchCompatEnabled");
 }
 
 fn merge_bool_setting(target: &mut Map<String, Value>, source: &Map<String, Value>, key: &str) {

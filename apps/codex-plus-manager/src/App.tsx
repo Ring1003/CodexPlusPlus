@@ -52,6 +52,7 @@ import {
   Sun,
   TestTube,
   Trash2,
+  Undo2,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -185,6 +186,7 @@ type BackendSettings = {
   relayContextConfigContents: string;
   activeRelayId: string;
   relayTestModel: string;
+  ccSwitchCompatEnabled: boolean;
 };
 
 type ZedOpenStrategy = "addToFocusedWorkspace" | "reuseWindow" | "newWindow" | "default";
@@ -302,6 +304,7 @@ type RelayResult = CommandResult<{
   requiresOpenaiAuth: boolean;
   hasBearerToken: boolean;
   backupPath: string | null;
+  externalManagerDetected: boolean;
 }>;
 
 type RelayPayload = Omit<RelayResult, "status" | "message">;
@@ -715,6 +718,7 @@ const defaultSettings: BackendSettings = {
   aggregateRelayProfiles: [],
   activeAggregateRelayId: "",
   relayTestModel: "gpt-5.4-mini",
+  ccSwitchCompatEnabled: false,
 };
 
 export function App() {
@@ -1578,6 +1582,16 @@ export function App() {
     return !!result && isSuccessStatus(result.status) && !result.configured;
   };
 
+  // 回滚到指定的 live 备份目录（cc-switch 兼容感知功能）
+  const rollbackToBackup = async (backupPath: string) => {
+    const result = await run(() => call<RelayResult>("rollback_to_backup", { backupPath }));
+    if (result) {
+      setRelay(result);
+      await refreshRelayFiles(true);
+      showNotice(t("回滚"), result.message, result.status);
+    }
+  };
+
   const saveRelayFile = async (kind: "config" | "auth", contents: string, silent = false) => {
     const result = await run(() => call<RelayFilesResult>("save_relay_file", { request: { kind, contents } }));
     if (result) {
@@ -2002,6 +2016,7 @@ export function App() {
       relaySwitching,
       switchOfficialMode,
       switchPureApiMode,
+      rollbackToBackup,
       refreshLogs,
       refreshDiagnostics,
       showMessage: async (title: string, message: string, status?: Status) => showNotice(title, message, status),
@@ -2113,6 +2128,7 @@ export function App() {
           {route === "relay" ? (
             <RelayScreen
               settings={settings}
+              relay={relay}
               relayFiles={relayFiles}
               envConflicts={envConflicts}
               ccsProviders={ccsProviders}
@@ -2264,6 +2280,7 @@ type Actions = {
   applyRelayInjection: () => Promise<boolean>;
   applyPureApiInjection: () => Promise<boolean>;
   clearRelayInjection: () => Promise<boolean>;
+  rollbackToBackup: (backupPath: string) => Promise<void>;
   saveRelayFile: (kind: "config" | "auth", contents: string, silent?: boolean) => Promise<void>;
   upsertContextEntry: (
     settings: BackendSettings,
@@ -2367,6 +2384,7 @@ function OverviewScreen({
 
 function RelayScreen({
   settings: _settings,
+  relay,
   relayFiles,
   envConflicts,
   ccsProviders,
@@ -2375,6 +2393,7 @@ function RelayScreen({
   actions,
 }: {
   settings: SettingsResult | null;
+  relay: RelayResult | null;
   relayFiles: RelayFilesResult | null;
   envConflicts: EnvConflictsResult | null;
   ccsProviders: CcsProvidersResult | null;
@@ -2454,6 +2473,7 @@ function RelayScreen({
         <CardHead title={t("供应商列表")} detail={tf("{0} 个供应商配置；可拖动排序，点编辑进入详情", [normalized.relayProfiles.length])} />
         <CardContent>
           <EnvConflictNotice envConflicts={envConflicts} actions={actions} />
+          <ExternalManagerNotice relay={relay} actions={actions} />
           <label className="switch-row relay-master-switch">
             <input
               checked={normalized.relayProfilesEnabled}
@@ -2574,8 +2594,48 @@ function EnvConflictNotice({
 
 function envConflictSourceLabel(source: string): string {
   if (source === "process") return t("当前进程");
-  if (source === "user") return t("用户环境");
+  if (source === "用户环境") return t("用户环境");
   return source || t("环境变量");
+}
+
+// 外部管理器（如 cc-switch）覆盖检测警告条
+// 当 relay.externalManagerDetected 为 true 时显示，提供一键回滚入口
+function ExternalManagerNotice({
+  relay,
+  actions,
+}: {
+  relay: RelayResult | null;
+  actions: Actions;
+}) {
+  const detected = !!relay?.externalManagerDetected;
+  const backupPath = relay?.backupPath ?? null;
+  if (!detected) return null;
+  return (
+    <div className="external-manager-notice">
+      <div className="external-manager-icon">
+        <ShieldAlert className="h-4 w-4" />
+      </div>
+      <div className="external-manager-body">
+        <strong>{t("检测到 cc-switch 可能修改了 codex 配置")}</strong>
+        <p>
+          {t("CodexPlusPlus 的部分设置（上下文窗口、压缩阈值、catalog 指针等）可能已被 cc-switch 覆盖。")}
+          {backupPath ? t("可回滚到上次 CodexPlusPlus 写入前的状态。") : ""}
+        </p>
+      </div>
+      <div className="external-manager-actions">
+        {backupPath ? (
+          <Button onClick={() => void actions.rollbackToBackup(backupPath)} size="sm">
+            <Undo2 className="h-4 w-4" />
+            {t("回滚到上次写入")}
+          </Button>
+        ) : null}
+        <Button onClick={() => void actions.refreshRelay()} size="sm" variant="secondary">
+          <RefreshCw className="h-4 w-4" />
+          {t("刷新检测")}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function EnhanceScreen({
@@ -2632,6 +2692,17 @@ function EnhanceScreen({
             <span>
               <strong>{t("启用 Windows Computer Use Guard")}</strong>
               <small>{t("默认关闭；开启后启动 Codex 时会自动保留官方 Computer Use 插件所需的 config.toml、bundled 插件和 notify 配置。")}</small>
+            </span>
+          </label>
+          <label className="switch-row">
+            <input
+              checked={form.ccSwitchCompatEnabled}
+              onChange={(event) => onFormChange({ ...form, ccSwitchCompatEnabled: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>
+              <strong>{t("cc-switch 兼容感知")}</strong>
+              <small>{t("默认关闭；开启后检测 cc-switch 对 codex 配置的修改，并在被覆盖后允许回滚到上次 CodexPlusPlus 写入前的状态。")}</small>
             </span>
           </label>
           <ModeSelector launchMode={form.launchMode} actions={actions} />

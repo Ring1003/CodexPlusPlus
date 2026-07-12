@@ -146,6 +146,8 @@ pub struct RelayPayload {
     pub requires_openai_auth: bool,
     pub has_bearer_token: bool,
     pub backup_path: Option<String>,
+    /// 是否检测到外部工具（如 cc-switch）修改了 codex 配置
+    pub external_manager_detected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1754,7 +1756,16 @@ pub fn reset_image_overlay_settings() -> CommandResult<SettingsPayload> {
 
 #[tauri::command]
 pub fn relay_status() -> CommandResult<RelayPayload> {
-    let status = codex_plus_core::relay_config::default_relay_status();
+    // 读取 cc-switch 兼容开关，决定是否执行外部管理检测
+    let cc_switch_compat_enabled = SettingsStore::default()
+        .load()
+        .map(|settings| settings.cc_switch_compat_enabled)
+        .unwrap_or(false);
+    let home = codex_plus_core::relay_config::default_codex_home_dir();
+    let status = codex_plus_core::relay_config::relay_status_from_home_with_compat(
+        &home,
+        cc_switch_compat_enabled,
+    );
     let message = if status.authenticated {
         "已检测到 ChatGPT 登录状态。"
     } else {
@@ -2772,6 +2783,59 @@ pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
     }
 }
 
+/// 回滚到指定的 live 备份目录
+///
+/// 供「cc-switch 兼容感知」功能的 UI 调用：当检测到外部工具覆盖了 codex 配置后，
+/// 用户可一键回滚到上次 CodexPlusPlus 写入前的状态。
+#[tauri::command]
+pub fn rollback_to_backup(backup_path: String) -> CommandResult<RelayPayload> {
+    let home = codex_plus_core::relay_config::default_codex_home_dir();
+    log_manager_event(
+        "manager.rollback_to_backup.start",
+        json!({ "backupPath": backup_path }),
+    );
+    match codex_plus_core::relay_config::rollback_to_backup_in_home(&home, &backup_path) {
+        Ok(result) => {
+            let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+            log_manager_event(
+                "manager.rollback_to_backup.ok",
+                json!({
+                    "configured": status.configured,
+                    "backupPath": result.backup_path.as_ref()
+                }),
+            );
+            ok(
+                "已回滚到指定备份，config.toml 与 auth.json 已恢复。",
+                relay_payload(status, result.backup_path),
+            )
+        }
+        Err(error) => {
+            let status = codex_plus_core::relay_config::relay_status_from_home(&home);
+            log_manager_event(
+                "manager.rollback_to_backup.failed",
+                json!({
+                    "configured": status.configured,
+                    "error": error.to_string()
+                }),
+            );
+            failed(
+                &format!("回滚失败：{error}"),
+                relay_payload(status, None),
+            )
+        }
+    }
+}
+
+/// 列出所有可用的 live 备份（用于 UI 展示可选回滚点）
+#[tauri::command]
+pub fn list_live_backups() -> CommandResult<Vec<codex_plus_core::relay_config::LiveBackupEntry>> {
+    let home = codex_plus_core::relay_config::default_codex_home_dir();
+    match codex_plus_core::relay_config::list_live_backups(&home) {
+        Ok(entries) => ok("已列出 live 备份。", entries),
+        Err(error) => failed(&format!("列出 live 备份失败：{error}"), Vec::new()),
+    }
+}
+
 fn relay_has_complete_files(relay: &codex_plus_core::settings::RelayProfile) -> bool {
     if relay.relay_mode == codex_plus_core::settings::RelayMode::Official
         && relay.official_mix_api_key
@@ -2863,6 +2927,7 @@ fn relay_payload(
         configured: status.configured,
         requires_openai_auth: status.requires_openai_auth,
         has_bearer_token: status.has_bearer_token,
+        external_manager_detected: status.external_manager_detected,
         backup_path,
     }
 }
@@ -3347,6 +3412,7 @@ mod tests {
                 configured: true,
                 requires_openai_auth: true,
                 has_bearer_token: true,
+                external_manager_detected: false,
             },
             None,
         );

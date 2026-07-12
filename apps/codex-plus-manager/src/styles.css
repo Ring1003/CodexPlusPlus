@@ -779,6 +779,50 @@ body:has(.light) {
   font-family: Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
 }
 
+/* cc-switch 兼容感知警告条（macOS 26 液态玻璃风格） */
+.external-manager-notice {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid hsl(var(--destructive) / var(--glass-border-alpha, 0.22));
+  border-radius: var(--glass-radius, 18px);
+  background: hsl(var(--destructive) / 0.1);
+  backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 1.8));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 22px)) saturate(var(--glass-saturate, 1.8));
+  margin-bottom: 12px;
+  padding: 12px;
+  box-shadow: var(--glass-shadow, none);
+}
+
+.external-manager-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: hsl(var(--destructive) / 0.18);
+  color: hsl(var(--destructive));
+}
+
+.external-manager-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.external-manager-body p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.45;
+}
+
+.external-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .relay-master-switch {
   margin-bottom: 10px;
 }

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cc-switch 共存兼容分析</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --accent: #0969da;
+    --border: #d0d7de;
+    --code-bg: #f6f8fa;
+    --code-fg: #24292f;
+    --warn-bg: #fff8c5;
+    --warn-border: #d4a72c;
+    --danger-bg: #ffebe9;
+    --danger-border: #ff8182;
+    --ok-bg: #dafbe1;
+    --ok-border: #1a7f37;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --border: #30363d;
+      --code-bg: #161b22;
+      --code-fg: #e6edf3;
+      --warn-bg: #3f2e00;
+      --warn-border: #9e6a03;
+      --danger-bg: #4a0d0d;
+      --danger-border: #a01919;
+      --ok-bg: #0f2818;
+      --ok-border: #2ea043;
+    }
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+  h1 { font-size: 1.9em; border-bottom: 2px solid var(--border); padding-bottom: 0.3em; margin-top: 0.5em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.25em; margin-top: 2em; }
+  h3 { font-size: 1.2em; margin-top: 1.6em; color: var(--accent); }
+  h4 { font-size: 1.05em; margin-top: 1.3em; }
+  blockquote {
+    border-left: 4px solid var(--accent);
+    background: var(--code-bg);
+    margin: 1em 0;
+    padding: 0.6em 1em;
+    color: var(--muted);
+    border-radius: 0 6px 6px 0;
+  }
+  blockquote p { margin: 0.4em 0; }
+  code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 0.92em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code-bg); font-weight: 600; }
+  tr:nth-child(2n) td { background: var(--code-bg); }
+  .badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 0.82em;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+  .badge.selected { background: var(--ok-bg); color: var(--ok-border); border: 1px solid var(--ok-border); }
+  .badge.note { background: var(--warn-bg); color: var(--warn-border); border: 1px solid var(--warn-border); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  a { color: var(--accent); }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.25em 0; }
+  strong { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<h1>cc-switch 共存兼容分析</h1>
+
+<blockquote>
+<p><strong>日期</strong>：2026-07-12<br>
+<strong>作者</strong>：MengJie<br>
+<strong>性质</strong>：纯分析文档，不含实现代码。决策已定为「感知 + 回滚即可，默认共享 <code>~/.codex</code>」。</p>
+</blockquote>
+
+<h2>一、背景与问题</h2>
+<p>我日常用 <a href="https://github.com/farion1231/cc-switch">cc-switch</a> 管理 Claude Code，同时也用它配过 Codex 的 provider。现在想用 CodexPlusPlus 专门管理 Codex。</p>
+<p>核心问题：<strong>两个工具都把 <code>~/.codex/config.toml</code> 和 <code>~/.codex/auth.json</code> 当成自己的「live 输出目标」，且互不知晓对方存在。</strong> 本文档分析冲突细节，并给出「在 CodexPlusPlus 单方面（不改 cc-switch）」能做的优化方案。</p>
+<blockquote><p><strong>决策结论</strong>（已与作者确认）：</p>
+<ul>
+<li>兼容深度 = <strong>感知 + 回滚</strong>（不碰核心 apply 写入语义）</li>
+<li>目录策略 = <strong>默认共享 <code>~/.codex</code></strong>（不引入独立 home）</li>
+</ul></blockquote>
+
+<h2>二、cc-switch 对 Codex 的写入机制（调研结论）</h2>
+<blockquote><p>证据来自 <code>farion1231/cc-switch</code> 仓库源码（<code>src-tauri/src/</code> 下 codex_config.rs / services/provider/ 等）。以下每条均有源码佐证。</p></blockquote>
+
+<h3>2.1 写入目标</h3>
+<table>
+<thead><tr><th>文件</th><th>路径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>config.toml</code></td><td><code>get_codex_config_dir().join("config.toml")</code></td><td>路由/endpoint/model/bearer token</td></tr>
+<tr><td><code>auth.json</code></td><td><code>get_codex_config_dir().join("auth.json")</code></td><td><code>OPENAI_API_KEY</code> / ChatGPT 登录缓存</td></tr>
+<tr><td><code>cc-switch-model-catalog.json</code></td><td><code>get_codex_config_dir().join("cc-switch-model-catalog.json")</code></td><td>cc-switch 自己的 catalog 投影</td></tr>
+</tbody>
+</table>
+<p><strong>关键点：cc-switch 不读 <code>CODEX_HOME</code> 环境变量</strong>。它用自己的设置项 <code>AppSettings.codex_config_dir</code>（默认 <code>~/.codex</code>，持久化在 <code>~/.cc-switch/settings.json</code>）。所以即使用户设了 <code>CODEX_HOME</code>，cc-switch 也只认自己的设置项。</p>
+
+<h3>2.2 写入语义：整体覆盖，不保留未知字段</h3>
+<p>cc-switch 切换 provider 时的写入链路：</p>
+<pre><code>ProviderService::switch
+ → write_live_with_common_config        (live.rs)
+   → build_effective_settings_with_common_config   // config 字符串 + snippet 合并
+   → write_live_snapshot(app_type=Codex)           (live.rs)
+     → codex_config::write_codex_provider_live_with_catalog
+       → prepare_codex_config_text_with_model_catalog  // DocumentMut 注入 catalog 字段
+       → write_codex_live_atomic(auth, config_text)
+         → write_text_file(&amp;config_path, &amp;cfg_text)    // ★ 字符串整体写入</code></pre>
+<p><strong>最终落盘走的是字符串整体写入</strong>——传入的字符串 = DB provider 的 config TOML + common-config 合并 + catalog 注入。<strong>磁盘上原有的、DB snapshot 里没有的字段会被丢弃</strong>。</p>
+<p>源码注释明确承认（<code>services/provider/mod.rs</code> <code>reapply_current_codex_official_live</code>）：</p>
+<blockquote><p>"重写 live 会整体替换 config.toml（有意设计），[mcp_servers] 随之丢失，写完必须立刻从 DB 重新投影启用的 MCP。"</p></blockquote>
+
+<h3>2.3 cc-switch 写入 config.toml 的字段清单</h3>
+<table>
+<thead><tr><th>字段</th><th>cc-switch 是否写</th><th>备注</th></tr></thead>
+<tbody>
+<tr><td><code>model_provider</code></td><td><strong>写</strong></td><td>常量 <code>CC_SWITCH_CODEX_MODEL_PROVIDER_ID = "custom"</code></td></tr>
+<tr><td><code>[model_providers.*]</code></td><td><strong>写</strong></td><td>用户 TOML 原文（name/base_url/wire_api 等）</td></tr>
+<tr><td><code>model</code></td><td><strong>写</strong></td><td>用户 TOML 原文</td></tr>
+<tr><td><code>model_catalog_json</code></td><td><strong>写</strong>（自己的 sentinel）</td><td><code>= "cc-switch-model-catalog.json"</code></td></tr>
+<tr><td><code>web_search</code></td><td><strong>条件写</strong></td><td>仅 <code>web_search = "disabled"</code> 是它的 sentinel</td></tr>
+<tr><td><code>experimental_bearer_token</code></td><td><strong>写</strong></td><td>特定第三方 provider 路径</td></tr>
+<tr><td><code>model_context_window</code></td><td>不主动写</td><td>用户 TOML 里有则保留；catalog 生成时会<strong>读</strong>它做 fallback</td></tr>
+<tr><td><code>model_auto_compact_token_limit</code></td><td>不主动写</td><td>全文无此字段写入逻辑</td></tr>
+<tr><td><code>[features]</code></td><td>不主动写</td><td>用户 TOML 里有则保留</td></tr>
+<tr><td><code>[mcp_servers]</code></td><td>切换后从 DB 重新投影</td><td>不在 provider snapshot 里</td></tr>
+<tr><td><code>[skills]/[plugins]/[marketplaces]</code></td><td>不写</td><td>skill 走文件系统</td></tr>
+</tbody>
+</table>
+
+<h3>2.4 common-config 自动同步的排除清单</h3>
+<p>cc-switch 切换 codex provider 前，会提取当前 live config 成「共享片段」（<code>extract_codex_common_config</code>）。<strong>排除清单</strong>（由测试 <code>extract_codex_common_config_strips_provider_fields_and_injected_artifacts</code> 权威定义）：</p>
+<ul>
+<li><strong>顶层键排除</strong>：<code>model_provider</code>、<code>model</code>、<code>wire_api</code>、<code>experimental_bearer_token</code>、<code>model_catalog_json</code>、<code>web_search</code>（仅当值为 <code>"disabled"</code>）</li>
+<li><strong>整表排除</strong>：<code>[model_providers]</code>、<code>[mcp_servers]</code>、<code>[mcp.servers]</code></li>
+</ul>
+<p><strong>CodexPlusPlus 关心的字段判断</strong>：</p>
+<table>
+<thead><tr><th>字段</th><th>是否会被 common-config 传播</th><th>依据</th></tr></thead>
+<tbody>
+<tr><td><code>model_context_window</code></td><td><strong>会传播</strong>（不在排除清单）</td><td>commit <code>473c2aaa</code> 只排除了 routing 字段</td></tr>
+<tr><td><code>model_auto_compact_token_limit</code></td><td><strong>会传播</strong>（不在排除清单）</td><td>同上</td></tr>
+<tr><td><code>model_catalog_json</code></td><td><strong>不会传播</strong>（显式排除）</td><td>测试断言 <code>!extracted.contains("model_catalog_json")</code></td></tr>
+</tbody>
+</table>
+<p><strong>风险</strong>：若用户在 cc-switch 启用了 Codex common-config，CodexPlusPlus 写的 <code>model_context_window</code> 可能被当共享配置扩散到所有 provider。</p>
+
+<h3>2.5 文件锁 / 写入标记</h3>
+<ul>
+<li><strong>无 OS 级 flock</strong>。并发保护只有进程内 <code>tokio::sync::Mutex</code>（<code>proxy/switch_lock.rs</code>，按 app_type 一把锁），<strong>不同进程之间无保护</strong>。</li>
+<li><strong>无所有权注释/时间戳/版本戳</strong>。cc-switch 不在文件里声明「这是我写的」。</li>
+<li><strong>唯一可识别 sentinel</strong>：
+<ol>
+<li><code>model_catalog_json = "cc-switch-model-catalog.json"</code>（固定文件名）</li>
+<li><code>web_search = "disabled"</code>（仅当值等于这个字符串）</li>
+</ol></li>
+</ul>
+
+<h3>2.6 保护外部字段的机制：无</h3>
+<p>cc-switch 没有任何「字段保护清单」配置项。用户无法声明「这些字段不要动」。唯一的「保留」发生在首次 import（<code>import_default_config</code>，一次性把 live 读进 DB），切换 provider 后即整体覆盖。</p>
+
+<h3>2.7 热切换 / failover 是否静默重写</h3>
+<table>
+<thead><tr><th>场景</th><th>是否写 config.toml</th></tr></thead>
+<tbody>
+<tr><td>用户手动切换 provider</td><td><strong>写</strong>（整体覆盖）</td></tr>
+<tr><td>Failover（故障转移）</td><td><strong>不写</strong>（只动代理内存路由 + DB 指针）</td></tr>
+<tr><td>Takeover 开（代理接管）</td><td><strong>写</strong>（改写成指向本地代理）</td></tr>
+<tr><td>Takeover 关</td><td><strong>写</strong>（从 backup 恢复）</td></tr>
+<tr><td>接管期间编辑 provider</td><td><strong>不写</strong>（写 DB backup）</td></tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：CodexPlusPlus 真正要警惕的是「用户手动切 provider」和「takeover 开/关」。Failover 本身不碰 config.toml。</p>
+
+<h3>2.8 cc-switch 的回读机制</h3>
+<ul>
+<li>启动时 <code>import_default_config</code> 会把 live config 整个读进 DB 作为 default provider（<strong>收编外部写入</strong>）。</li>
+<li>编辑当前 provider 时 <code>strip_common_config_from_live_settings</code> 从 live 回填到 DB。</li>
+</ul>
+
+<hr>
+
+<h2>三、CodexPlusPlus 的读写链路（调研结论）</h2>
+<blockquote><p>证据来自本仓库源码，关键位置 <code>crates/codex-plus-core/src/</code>。</p></blockquote>
+
+<h3>3.1 所有写入 config.toml / auth.json 的入口</h3>
+<p><strong>唯一汇聚点</strong>：<code>write_codex_live_atomic</code>（<code>relay_config.rs:1046</code>）。</p>
+<p>直接调用它的公开函数：</p>
+<ul>
+<li><code>apply_relay_config_to_home_with_protocol</code>（<code>relay_config.rs:243</code>）—— 老式中转注入</li>
+<li><code>apply_pure_api_config_to_home_with_protocol</code>（<code>relay_config.rs:468</code>）—— 纯 API 注入</li>
+<li><code>apply_relay_files_to_home_with_computer_use_guard</code>（<code>relay_config.rs:295</code>）—— 完整 config+auth 写入</li>
+<li><code>apply_relay_config_file_to_home</code>（<code>relay_config.rs:446</code>）—— 只写 config.toml</li>
+<li><code>clear_relay_config_to_home_with_auth_and_computer_use_guard</code>（<code>relay_config.rs:608</code>）—— 清除注入</li>
+</ul>
+<p>经由 <code>apply_relay_files_to_home</code> 间接写入的高层入口：</p>
+<ul>
+<li><code>apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard</code>（<code>relay_config.rs:385</code>）—— <strong>切换供应商主入口</strong></li>
+</ul>
+<p>Tauri 命令层（UI 按钮真实落点，<code>apps/codex-plus-manager/src-tauri/src/commands.rs</code>）：</p>
+<ul>
+<li><code>switch_relay_profile</code>（<code>commands.rs:1851</code>）—— 切换供应商下拉框</li>
+<li><code>apply_relay_injection</code>（<code>commands.rs:2498</code>）—— 应用中转按钮</li>
+<li><code>apply_pure_api_injection</code>（<code>commands.rs:2633</code>）—— 纯 API 注入按钮</li>
+<li><code>clear_relay_injection</code>（<code>commands.rs:2734</code>）—— 清除注入按钮</li>
+</ul>
+<p><strong>隐蔽写入点</strong>：<code>launcher.rs:537</code>，每次启动 Codex 都自动调 <code>apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard</code>。<strong>这是 cc-switch 冲突的高风险时机</strong>（用户可能刚用 cc-switch 切完，启动 codex 又被 CodexPlusPlus 盖回去，且无 UI 感知）。</p>
+
+<h3>3.2 写入前的备份机制</h3>
+<p><code>create_live_backup</code>（<code>relay_config.rs:2301</code>）：</p>
+<ul>
+<li>备份目录：<code>{home}/backups/codex-plus-live-{timestamp_millis}/</code></li>
+<li>目录内放写入前的 <code>config.toml</code> / <code>auth.json</code> 原始副本</li>
+<li><strong>只保留上一版，不剪枝，不轮转</strong></li>
+<li><code>restore_optional_file</code>（<code>relay_config.rs:2290</code>）只在写入失败时自动回滚，不用于「检测外部修改后回滚」</li>
+</ul>
+
+<h3>3.3 CodexPlusPlus 写 config.toml 的字段集</h3>
+<p><strong>根级字段（整体覆盖）</strong>：</p>
+<ul>
+<li><code>model</code>（<code>relay_config.rs:1964</code>）</li>
+<li><code>model_provider</code>（<code>relay_config.rs:1748</code>）</li>
+<li><code>model_context_window</code>（<code>relay_config.rs:1429</code>）</li>
+<li><code>model_auto_compact_token_limit</code>（<code>relay_config.rs:1432</code>）</li>
+<li><code>model_catalog_json</code>（<code>relay_config.rs:1476</code>，相对路径 <code>model-catalogs/{id}.json</code>）</li>
+</ul>
+<p><strong>表字段</strong>：</p>
+<ul>
+<li><code>model_providers.{id}</code>（整体覆盖当前 provider 的表）</li>
+<li><strong><code>retain_only_provider_table</code>（<code>relay_config.rs:2236</code>）会删掉所有非当前 provider 的子表</strong>，包括 legacy <code>CodexPlusPlus</code>/<code>CodexPP</code>——这是与 cc-switch 冲突的核心点</li>
+</ul>
+<p><strong>保留合并（不覆盖）的字段</strong>：</p>
+<ul>
+<li><code>merge_common_config_into_config</code>（<code>relay_config.rs:759</code>）：common config 合并</li>
+<li><code>preserve_unmanaged_live_context_entries</code>（<code>relay_config.rs:871</code>）：保护 live 里 mcp/skills/plugins 的非受管条目——<strong>现有的「尊重外部编辑」钩子，但不覆盖 model_providers</strong></li>
+<li><code>preserve_live_marketplace_configs</code>（<code>relay_config.rs:1127</code>）：保留 marketplaces 表</li>
+</ul>
+<p><strong>auth.json</strong>：整体覆盖（<code>relay_config.rs:1108</code>）。</p>
+
+<h3>3.4 backfill 回读链路</h3>
+<p><code>backfill_relay_profile_from_home_with_common</code>（<code>relay_config.rs:686</code>）：从 live config 读回，<strong>会覆盖 profile 快照</strong>。包括：</p>
+<ul>
+<li><code>restore_profile_provider_id_for_backfill</code>（<code>relay_config.rs:1751</code>）：保留外部 provider id</li>
+<li><code>restore_profile_auth_from_live_config</code>（<code>relay_config.rs:1793</code>）：从 live 回填 token</li>
+<li><code>sync_profile_mode_from_backfilled_live</code>（<code>relay_config.rs:1836</code>）：自动调整 relay_mode</li>
+</ul>
+<p><strong>测试 1914/1972/2014/2098 锁定了「尊重外部编辑」语义</strong>——CodexPlusPlus 已有意识地「外部改了 live 就认」。这意味着 cc-switch 写的内容会被 CodexPlusPlus 回吸收进 profile 快照。</p>
+
+<h3>3.5 文件锁 / 写入标记：无</h3>
+<ul>
+<li><code>atomic_write</code>（<code>settings.rs:1169</code>）只是 write-temp-then-rename，<strong>无 flock，无冲突检测</strong>。</li>
+<li>仓库唯一的 fs2 锁在 <code>ports.rs:228</code>，仅用于 loopback 端口守卫，与 config.toml 无关。</li>
+<li><code>write_codex_live_atomic</code> <strong>不在 config.toml 里写任何版本号/时间戳/ownership 注释</strong>。</li>
+</ul>
+
+<h3>3.6 「外部工具接管」开关：无</h3>
+<p>全仓搜索无 <code>co-managed</code>/<code>external manager</code>/<code>ownership</code>/<code>takeover</code>（computer_use_guard 除外）等概念。</p>
+<p>已有的 <code>ccs_import.rs</code>（<code>crates/codex-plus-core/src/ccs_import.rs</code>）是<strong>单向一次性导入</strong>：从 <code>~/.cc-switch/cc-switch.db</code> 读 provider 转 RelayProfile，<strong>不监听、不协调</strong>。</p>
+
+<h3>3.7 catalog 文件的独立性</h3>
+<ul>
+<li>catalog 文件：<code>{home}/model-catalogs/{sanitized_id}.json</code>（<code>relay_config.rs:1469</code>），由 <code>std::fs::write</code> 直接写，<strong>不走 write_codex_live_atomic，无备份，无锁</strong>。</li>
+<li>cc-switch 不动 <code>model-catalogs/</code> 目录（它只懂 config.toml 的标准字段）。</li>
+<li><strong>catalog 文件本身天然安全；唯一脆弱点是 config.toml 里的指针 key</strong>（属于 3.3 的整体覆盖字段）。</li>
+</ul>
+
+<h3>3.8 约束改动的关键测试</h3>
+<table>
+<thead><tr><th>测试</th><th>行号</th><th>约束</th></tr></thead>
+<tbody>
+<tr><td><code>apply_relay_files_switches_complete_config_and_auth_json</code></td><td>522</td><td>config+auth 完全替换语义、backup 格式</td></tr>
+<tr><td><code>apply_relay_profile_to_home_with_switch_rules_preserves_unmanaged_live_context_entries</code></td><td>2479</td><td>preserve_unmanaged 行为</td></tr>
+<tr><td><code>backfill_current_profile_preserves_external_live_provider_id_edit_before_switch</code></td><td>1914</td><td>尊重外部 provider id</td></tr>
+<tr><td><code>backfill_official_profile_promotes_external_pure_api_live_edit_before_switch</code></td><td>1972</td><td>同上</td></tr>
+<tr><td><code>backfill_official_profile_does_not_promote_codex_plus_switch_live_config</code></td><td>2056</td><td>区分自己写 vs 外部</td></tr>
+<tr><td><code>apply_relay_profile_preserves_user_model_catalog_json</code></td><td>1054</td><td>catalog 指针保护</td></tr>
+</tbody>
+</table>
+<p><strong>结论</strong>：所有改动<strong>必须 feature flag 包裹</strong>，默认行为不变，才能不挂这一片测试。<code>BackendSettings</code>（<code>settings.rs</code>）是成熟的开关位（已有 <code>provider_sync_enabled</code>/<code>relay_profiles_enabled</code> 先例）。</p>
+
+<hr>
+
+<h2>四、冲突点汇总表</h2>
+<table>
+<thead><tr><th>冲突维度</th><th>cc-switch</th><th>CodexPlusPlus</th><th>冲突性质</th></tr></thead>
+<tbody>
+<tr><td>写入目录</td><td><code>codex_config_dir</code>（默认 <code>~/.codex</code>，不读 <code>CODEX_HOME</code>）</td><td><code>CODEX_HOME</code> 或 <code>~/.codex</code></td><td>默认一致；用户改一边会错开</td></tr>
+<tr><td>config.toml 语义</td><td>整体覆盖</td><td>整体覆盖</td><td><strong>硬冲突</strong>，last-writer-wins</td></tr>
+<tr><td>config.toml 字段</td><td>provider/model/catalog(sentinel)/web_search</td><td>model/provider/context-limits/catalog/features</td><td>部分重叠（provider/model/catalog）</td></tr>
+<tr><td>common-config 传播</td><td><code>model_context_window</code>/<code>model_auto_compact_token_limit</code> 会传播</td><td>无此机制</td><td>CodexPlusPlus 字段可能被扩散</td></tr>
+<tr><td>auth.json</td><td>整体覆盖</td><td>整体覆盖</td><td><strong>硬冲突</strong>，零和</td></tr>
+<tr><td>failover</td><td>不写 config.toml</td><td>—</td><td>无害</td></tr>
+<tr><td>手动切换 / takeover</td><td>会写</td><td>launcher 自动注入也会写</td><td>主冲突源</td></tr>
+<tr><td>回读</td><td>import 会收编 live</td><td>backfill 会吸收 live</td><td>互相污染 SSOT</td></tr>
+<tr><td>catalog 文件</td><td><code>cc-switch-model-catalog.json</code></td><td><code>model-catalogs/{id}.json</code></td><td>文件独立，指针互斥</td></tr>
+</tbody>
+</table>
+
+<hr>
+
+<h2>五、优化方案（按作者选定的「感知 + 回滚」深度）</h2>
+
+<h3>方案 P0：零代码缓解（文档/约定层）</h3>
+<p><strong>P0.1 职责分工约定</strong>：在 README/AGENTS.md 写明「cc-switch 只管 Claude Code，Codex 交给 CodexPlusPlus」。cc-switch 的 codex 是 opt-in 的（需用户主动加 provider），不配置即不冲突。</p>
+<p><strong>P0.2 目录隔离建议</strong>：若用户愿意，可让 CodexPlusPlus 用独立 <code>CODEX_HOME</code>（如 <code>~/.codex-cpp</code>），与 cc-switch 管的 <code>~/.codex</code> 物理隔离——这是唯一 100% 消除冲突的方案，但用户需用对应 <code>CODEX_HOME</code> 启动 codex。</p>
+<blockquote><p>作者已选「默认共享 <code>~/.codex</code>」，故 P0.2 仅作建议项保留。</p></blockquote>
+
+<h3>方案 P1：感知与提示（不改写入语义，最小侵入）<span class="badge selected">选定</span></h3>
+
+<h4>P1.1 写入指纹基线</h4>
+<ul>
+<li><strong>钩子点</strong>：<code>relay_switch::switch_relay_profile_in_home</code>（<code>relay_switch.rs:17</code>）入口 + <code>write_codex_live_atomic</code>（<code>relay_config.rs:1046</code>）</li>
+<li><strong>做法</strong>：每次 CodexPlusPlus 写入后，把「写入时间 + config.toml 的 hash/mtime」存进 <code>BackendSettings</code></li>
+<li><strong>复用</strong>：借鉴 <code>provider_sync.rs:379</code> 的 managedBy 元数据模式</li>
+<li><strong>测试影响</strong>：无（纯新增字段，默认值兼容）</li>
+</ul>
+
+<h4>P1.2 backfill 时识别外部写入</h4>
+<ul>
+<li><strong>钩子点</strong>：<code>backfill_relay_profile_from_home_with_common</code>（<code>relay_config.rs:686</code>）顶部</li>
+<li><strong>做法</strong>：读 live config 后对比指纹基线，不一致即标记 <code>external_manager_detected</code></li>
+<li><strong>识别信号（启发式，任一触发）</strong>：
+<ol>
+<li>provider id 不在 CodexPlusPlus 已知 profile 集合</li>
+<li>存在 cc-switch sentinel：<code>model_catalog_json = "cc-switch-model-catalog.json"</code> 或 <code>web_search = "disabled"</code></li>
+<li><code>~/.cc-switch/cc-switch.db</code> 的 mtime 在最近 N 秒内</li>
+</ol></li>
+<li><strong>UI 表现</strong>：顶部警告条「检测到 cc-switch 可能修改了 codex 配置，CodexPlusPlus 的部分设置可能已失效」</li>
+<li><strong>测试约束</strong>：<strong>必须不破坏</strong>测试 1914/1972/2014/2098——只加「标记」，不改「吸收」行为</li>
+</ul>
+
+<h4>P1.3 RelayStatus 增加外部管理检测字段</h4>
+<ul>
+<li><strong>钩子点</strong>：<code>relay_status_from_home</code>（<code>relay_config.rs:161</code>）</li>
+<li><strong>做法</strong>：给 <code>RelayStatus</code> 加 <code>external_manager_detected: bool</code>，供 UI 实时显示警告条</li>
+<li><strong>测试影响</strong>：<code>reports_relay_configured_when_required_keys_exist</code>（<code>relay_config.rs:232</code>）等状态测试需补默认值</li>
+</ul>
+
+<h3>方案 P3：回滚与恢复（事后补救）<span class="badge selected">选定</span></h3>
+
+<h4>P3.1 backup metadata.json</h4>
+<ul>
+<li><strong>钩子点</strong>：<code>create_live_backup</code>（<code>relay_config.rs:2301</code>）</li>
+<li><strong>做法</strong>：备份目录加 <code>metadata.json</code>，记录：写入时间、写入者版本、profile id、触发命令、写入前 config 的 hash</li>
+<li><strong>借鉴</strong>：<code>provider_sync.rs:379</code> 的 managedBy 模式（已有测试覆盖）</li>
+<li><strong>测试影响</strong>：测试 546 只断言 backup 目录含 config/auth，加 metadata.json 不破坏</li>
+</ul>
+
+<h4>P3.2 手动回滚 API</h4>
+<ul>
+<li><strong>钩子点</strong>：把 <code>restore_optional_file</code>（<code>relay_config.rs:2290</code>）包成公开的 <code>rollback_to_backup(home, backup_dir)</code></li>
+<li><strong>UI</strong>：「恢复到上次 CodexPlusPlus 写入前的状态」按钮</li>
+<li><strong>场景</strong>：冲突发生后，用户可一键回到 CodexPlusPlus 上次写入前的快照</li>
+</ul>
+
+<h4>P3.3 备份剪枝 + 外部修改快照</h4>
+<ul>
+<li><strong>现状</strong>：<code>relay_config.rs</code> 内不剪枝，备份无限累积</li>
+<li><strong>做法</strong>：仿 <code>provider_sync.rs:1105 prune_backups</code>；检测到外部修改时额外存 <code>backups/external-detected-{ts}/</code> 快照</li>
+</ul>
+
+<h3>选定方案的 MVP 范围</h3>
+<p><strong>MVP = P1（感知）+ P3（回滚）</strong>，对应原方案表的 P1+P3 两档：</p>
+<ul>
+<li>用户能看到冲突警告（P1.2/P1.3 UI 警告条）</li>
+<li>用户能在冲突后回滚（P3.2 一键回滚按钮）</li>
+<li>基础设施齐备（P1.1 指纹 + P3.1 metadata）</li>
+<li><strong>不碰核心 apply 写入语义</strong>，所有改动 feature flag 默认关闭，现有测试不受影响</li>
+</ul>
+
+<h3>未选定（仅记录，本期不做）</h3>
+<table>
+<thead><tr><th>方案</th><th>说明</th><th>未选原因</th></tr></thead>
+<tbody>
+<tr><td>P2 launcher 守卫</td><td>在 <code>launcher.rs:537</code> 启动注入前加外部检测</td><td>会动 launcher 测试矩阵，本期深度不足</td></tr>
+<tr><td>P4 provider 表保护</td><td>扩展 <code>preserve_unmanaged_*</code> 到 model_providers</td><td>改核心 apply 语义，测试约束多</td></tr>
+<tr><td>P5 auth.json merge</td><td>改 auth 写入为 merge 模式</td><td>token 易错乱，高风险</td></tr>
+</tbody>
+</table>
+
+<hr>
+
+<h2>六、可行性总评：中-高</h2>
+<p><strong>利好</strong>：</p>
+<ol>
+<li>所有写入汇聚到单一函数 <code>write_codex_live_atomic</code>，拦截点集中</li>
+<li>已有「尊重外部编辑」哲学（<code>preserve_unmanaged_*</code>、backfill 尊重外部 provider id）——兼容 cc-switch 是自然延伸</li>
+<li>已有可借鉴基础设施：<code>BackendSettings</code> 开关位、<code>provider_sync.rs</code> 锁+metadata 模式</li>
+<li>catalog 文件天然不受 cc-switch 影响</li>
+</ol>
+<p><strong>风险</strong>：</p>
+<ol>
+<li>无文件锁、无作者标记——检测「cc-switch 刚写过」只能靠 mtime + 内容启发式，不够可靠</li>
+<li>auth.json 是零和冲突点（双方都整体覆盖），但本期不做 auth merge，规避此风险</li>
+<li>launcher 自动注入是冲突重灾区，但本期不做 launcher 守卫，仅在文档提示</li>
+</ol>
+
+<h2>七、关键文件路径汇总</h2>
+<ul>
+<li><code>crates/codex-plus-core/src/relay_config.rs</code> — 主战场，所有读写逻辑（2624 行）</li>
+<li><code>crates/codex-plus-core/src/relay_switch.rs</code> — 切换编排</li>
+<li><code>crates/codex-plus-core/src/settings.rs</code> — <code>atomic_write</code> + <code>BackendSettings</code> 开关位</li>
+<li><code>crates/codex-plus-core/src/codex_home.rs</code> — home 解析</li>
+<li><code>crates/codex-plus-core/src/ccs_import.rs</code> — 已有 cc-switch 单向导入</li>
+<li><code>crates/codex-plus-core/src/launcher.rs</code> — 隐蔽自动注入点（本期不改）</li>
+<li><code>crates/codex-plus-data/src/provider_sync.rs</code> — 可借鉴的锁 + backup metadata 模式</li>
+<li><code>apps/codex-plus-manager/src-tauri/src/commands.rs</code> — Tauri UI 命令层</li>
+<li><code>crates/codex-plus-core/tests/relay_config.rs</code> — 测试约束（3316 行）</li>
+</ul>
+
+<h2>八、附录：cc-switch 可识别 sentinel 清单</h2>
+<p>供 P1.2 识别逻辑使用：</p>
+<ol>
+<li><code>model_catalog_json = "cc-switch-model-catalog.json"</code>（config.toml 顶层键，固定文件名）</li>
+<li><code>web_search = "disabled"</code>（仅当值严格等于此字符串）</li>
+<li><code>~/.cc-switch/cc-switch.db</code> 存在且 mtime 较新</li>
+<li><code>~/.cc-switch/settings.json</code> 存在（cc-switch 已安装配置过）</li>
+</ol>
+<blockquote><p>注：cc-switch 不留 ownership 注释，无法 100% 可靠区分「cc-switch 写的」vs「用户手改的」。P1 的警告条定位为「可能」而非「确定」。</p></blockquote>
+
+</body>
+</html>

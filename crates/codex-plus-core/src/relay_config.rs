@@ -48,6 +48,8 @@ pub struct RelayStatus {
     pub configured: bool,
     pub requires_openai_auth: bool,
     pub has_bearer_token: bool,
+    /// 是否检测到外部工具（如 cc-switch）修改了 codex 配置
+    pub external_manager_detected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -159,8 +161,25 @@ fn table_mut_if_exists<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mu
 }
 
 pub fn relay_status_from_home(home: &Path) -> RelayStatus {
+    relay_status_from_home_with_compat(home, false)
+}
+
+/// 带 cc-switch 兼容检测的 relay 状态查询
+///
+/// 当 `cc_switch_compat_enabled` 为 true 时，会额外执行外部管理检测，
+/// 结果填入 `external_manager_detected` 字段。默认（false）恒为 false，
+/// 保持与原 `relay_status_from_home` 完全一致的行为。
+pub fn relay_status_from_home_with_compat(
+    home: &Path,
+    cc_switch_compat_enabled: bool,
+) -> RelayStatus {
     let auth = chatgpt_auth_status_from_home(home);
     let config = relay_config_status_from_home(home);
+    let external_manager_detected = if cc_switch_compat_enabled {
+        crate::cc_switch_detect::detect_external_manager(home).detected
+    } else {
+        false
+    };
     RelayStatus {
         authenticated: auth.authenticated,
         auth_source: auth.source,
@@ -169,6 +188,7 @@ pub fn relay_status_from_home(home: &Path) -> RelayStatus {
         configured: config.configured,
         requires_openai_auth: config.requires_openai_auth,
         has_bearer_token: config.has_bearer_token,
+        external_manager_detected,
     }
 }
 
@@ -2318,6 +2338,204 @@ fn create_live_backup(
         std::fs::write(backup_dir.join("auth.json"), auth)?;
     }
     Ok(Some(backup_dir.to_string_lossy().to_string()))
+}
+
+/// 备份元数据：记录写入快照的上下文，用于回滚时识别和诊断
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupMetadata {
+    /// 元数据格式版本
+    pub version: u32,
+    /// 写入者标识
+    pub managed_by: String,
+    /// 创建时间（毫秒，UNIX_EPOCH 起）
+    pub created_at_millis: u128,
+    /// 触发写入的命令名（switch / apply / clear / rollback 等）
+    pub trigger: String,
+    /// 写入前 config.toml 的内容哈希（SHA256 前 16 字符）
+    pub config_hash: String,
+}
+
+impl BackupMetadata {
+    fn now(trigger: &str, config_hash: String) -> Self {
+        Self {
+            version: 1,
+            managed_by: "CodexPlusPlus".to_string(),
+            created_at_millis: timestamp_millis(),
+            trigger: trigger.to_string(),
+            config_hash,
+        }
+    }
+}
+
+/// 创建带元数据的 live 备份
+///
+/// 与 `create_live_backup` 相同，但额外写入 `metadata.json` 记录写入上下文，
+/// 供「cc-switch 兼容感知」的回滚功能识别备份来源。`trigger` 标识触发命令。
+pub fn create_live_backup_with_metadata(
+    home: &Path,
+    config: Option<&[u8]>,
+    auth: Option<&[u8]>,
+    trigger: &str,
+) -> anyhow::Result<Option<String>> {
+    if config.is_none() && auth.is_none() {
+        return Ok(None);
+    }
+
+    let config_hash = config
+        .map(|bytes| crate::write_fingerprint::compute_config_hash(
+            std::str::from_utf8(bytes).unwrap_or(""),
+        ))
+        .unwrap_or_default();
+
+    let backup_dir = home
+        .join("backups")
+        .join(format!("codex-plus-live-{}", timestamp_millis()));
+    std::fs::create_dir_all(&backup_dir)?;
+    if let Some(config) = config {
+        std::fs::write(backup_dir.join("config.toml"), config)?;
+    }
+    if let Some(auth) = auth {
+        std::fs::write(backup_dir.join("auth.json"), auth)?;
+    }
+    let metadata = BackupMetadata::now(trigger, config_hash);
+    let metadata_bytes = serde_json::to_vec_pretty(&metadata)?;
+    crate::settings::atomic_write(&backup_dir.join("metadata.json"), &metadata_bytes)?;
+    Ok(Some(backup_dir.to_string_lossy().to_string()))
+}
+
+/// 备份目录条目：用于 UI 展示可选回滚点
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveBackupEntry {
+    /// 备份目录绝对路径
+    pub path: String,
+    /// 备份目录名（如 codex-plus-live-1700000000000）
+    pub name: String,
+    /// 创建时间（毫秒，从目录名解析），解析失败为 0
+    pub created_at_millis: u128,
+    /// 触发命令（从 metadata.json 读，无 metadata 为空串）
+    pub trigger: String,
+    /// 是否含 config.toml
+    pub has_config: bool,
+    /// 是否含 auth.json
+    pub has_auth: bool,
+}
+
+/// 列出 home 下所有 CodexPlusPlus live 备份，按时间倒序（最新在前）
+pub fn list_live_backups(home: &Path) -> anyhow::Result<Vec<LiveBackupEntry>> {
+    let backups_root = home.join("backups");
+    let mut entries = Vec::new();
+    let read = match std::fs::read_dir(&backups_root) {
+        Ok(read) => read,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in read {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("codex-plus-live-") {
+            continue;
+        }
+        let created_at_millis = name
+            .strip_prefix("codex-plus-live-")
+            .and_then(|suffix| suffix.parse::<u128>().ok())
+            .unwrap_or(0);
+        let trigger = std::fs::read_to_string(path.join("metadata.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| {
+                value
+                    .get("trigger")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_default();
+        let has_config = path.join("config.toml").exists();
+        let has_auth = path.join("auth.json").exists();
+        entries.push(LiveBackupEntry {
+            path: path.to_string_lossy().to_string(),
+            name,
+            created_at_millis,
+            trigger,
+            has_config,
+            has_auth,
+        });
+    }
+    // 时间倒序：最新在前
+    entries.sort_by(|a, b| b.created_at_millis.cmp(&a.created_at_millis));
+    Ok(entries)
+}
+
+/// 回滚到指定备份目录
+///
+/// 校验 `backup_path` 位于 `home/backups/` 下，读取其中的 config.toml / auth.json，
+/// 先对当前 live 状态创建一个新备份（回滚前快照），再用备份内容覆盖 live 文件。
+/// 成功后记录写入指纹。
+pub fn rollback_to_backup_in_home(
+    home: &Path,
+    backup_path: &str,
+) -> anyhow::Result<RelayApplyResult> {
+    let backup_dir = PathBuf::from(backup_path);
+    // 安全校验：备份路径必须位于 home/backups/ 下，且自身是目录
+    let backups_root = home.join("backups");
+    let canonical_backup = backup_dir
+        .canonicalize()
+        .map_err(|error| anyhow::anyhow!("备份目录不存在或无法访问：{error}"))?;
+    let canonical_root = backups_root
+        .canonicalize()
+        .map_err(|error| anyhow::anyhow!("backups 目录无法访问：{error}"))?;
+    if !canonical_backup.starts_with(&canonical_root) {
+        anyhow::bail!("备份路径必须位于 {} 下", backups_root.display());
+    }
+
+    let config_backup = backup_dir.join("config.toml");
+    let auth_backup = backup_dir.join("auth.json");
+    if !config_backup.exists() && !auth_backup.exists() {
+        anyhow::bail!("备份目录中既无 config.toml 也无 auth.json，无法回滚");
+    }
+
+    let config_contents = std::fs::read_to_string(&config_backup).ok();
+    let auth_bytes = std::fs::read(&auth_backup).ok();
+
+    // 回滚前，先对当前 live 状态创建一个「回滚前快照」备份（含 metadata）
+    let live_config = std::fs::read(&home.join("config.toml")).ok();
+    let live_auth = std::fs::read(&home.join("auth.json")).ok();
+    let _pre_rollback_backup = create_live_backup_with_metadata(
+        home,
+        live_config.as_deref(),
+        live_auth.as_deref(),
+        "rollback-pre",
+    )?;
+
+    // 用备份内容覆盖 live（复用现有的原子写入路径，但不走 provider 逻辑）
+    std::fs::create_dir_all(home)?;
+    if let Some(ref config) = config_contents {
+        if !config.trim().is_empty() {
+            validate_toml_config(config, &home.join("config.toml"))?;
+        }
+        crate::settings::atomic_write(&home.join("config.toml"), config.as_bytes())?;
+    }
+    if let Some(ref auth) = auth_bytes {
+        if !auth.iter().all(|byte| byte.is_ascii_whitespace()) {
+            validate_auth_json(auth, &home.join("auth.json"))?;
+        }
+        crate::settings::atomic_write(&home.join("auth.json"), auth)?;
+    }
+
+    // 回滚视为一次 CodexPlusPlus 写入，记录指纹
+    let _ = crate::write_fingerprint::record_write_fingerprint(home);
+
+    let status = relay_config_status_from_home(home);
+    Ok(RelayApplyResult {
+        config_path: status.config_path,
+        backup_path: Some(canonical_backup.to_string_lossy().to_string()),
+        configured: status.configured,
+    })
 }
 
 fn timestamp_millis() -> u128 {

@@ -1,5 +1,20 @@
 # 更新日志
 
+## 1.0.3 - 2026-07-12
+
+cc-switch 共存兼容功能版本，在与 cc-switch 同时管理 codex 时提供感知与回滚能力。
+
+- **cc-switch 兼容感知**：检测 cc-switch（或其他外部工具）对 `~/.codex/config.toml` 的修改，在供应商列表顶部显示玻璃化警告条。
+- **写入指纹机制**：CodexPlusPlus 每次写入后记录 config.toml 的时间戳与内容哈希到独立指纹文件，用于识别后续的外部篡改。
+- **手动回滚**：检测到外部覆盖后，警告条提供一键回滚到上次 CodexPlusPlus 写入前状态的入口；回滚前会自动创建「回滚前快照」备份。
+- **backup metadata.json**：备份目录新增元数据文件，记录写入者、触发命令和内容哈希，便于诊断。
+- **feature flag**：新增 `ccSwitchCompatEnabled` 开关（默认关闭），在「Codex 增强」页可开启；关闭时所有现有行为完全不变。
+- 识别信号包括：cc-switch 的 catalog 指针 / web_search sentinel、指纹哈希不一致、mtime 变化、cc-switch 数据库近期活动。
+
+## 1.0.2 - 2026-07-12
+
+- 会话分页修复。
+
 ## 1.0.1 - 2026-07-12
 
 fork 仓库（Ring1003/CodexPlusPlus）首个独立版本，基于 BigPizzaV3/CodexPlusPlus 净化与重构。
