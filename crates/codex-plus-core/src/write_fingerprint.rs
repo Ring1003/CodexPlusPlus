@@ -36,12 +36,12 @@ pub fn default_write_fingerprint_path() -> PathBuf {
 // ── 测试串行锁 ──
 // 所有涉及指纹文件的测试（含 cc_switch_detect、tests/relay_config）必须持有此锁，
 // 串行执行，避免并行测试互相覆盖/清理全局指纹文件。
-// 路径重定向方案在 Windows 上会因 temp 文件竞争失败，故改用全局锁串行。
-#[cfg(test)]
+// 注意：不用 #[cfg(test)]，因为集成测试（tests/ 目录）是独立 crate，
+// 在 codex_plus_core 非 test cfg 编译时也要能访问此 API。
+#[doc(hidden)]
 pub static FINGERPRINT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// 测试用：获取指纹测试串行锁的 guard。供跨模块测试共享。
-#[cfg(test)]
 #[doc(hidden)]
 pub fn lock_fingerprint_for_tests() -> std::sync::MutexGuard<'static, ()> {
     FINGERPRINT_TEST_LOCK
