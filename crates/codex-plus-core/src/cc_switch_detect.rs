@@ -172,39 +172,24 @@ fn now_secs() -> u64 {
 mod tests {
     use super::*;
     use crate::write_fingerprint::{
-        WriteFingerprint, compute_config_hash, save_write_fingerprint,
-        set_fingerprint_path_for_tests,
+        WriteFingerprint, compute_config_hash, lock_fingerprint_for_tests,
+        save_write_fingerprint,
     };
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
-    /// RAII guard：把指纹路径重定向到独立 tempdir，测试结束自动恢复。
-    /// 彻底隔离并行测试对真实 ~/.codex-session-delete 的竞争。
-    struct FingerprintDirGuard {
-        _temp: tempfile::TempDir,
-        prev: Option<PathBuf>,
-    }
-
-    impl FingerprintDirGuard {
-        fn new() -> Self {
-            let temp = tempdir().expect("创建临时指纹目录失败");
-            let fp_path = temp.path().join("write-fingerprint.json");
-            let prev = set_fingerprint_path_for_tests(Some(fp_path));
-            Self { _temp: temp, prev }
-        }
-    }
-
-    impl Drop for FingerprintDirGuard {
-        fn drop(&mut self) {
-            set_fingerprint_path_for_tests(self.prev.take());
-        }
+    /// helper：拿全局串行锁并清掉指纹，返回 guard。
+    /// 所有涉及指纹文件的测试必须用此 helper，避免并行竞争。
+    fn setup_locked() -> std::sync::MutexGuard<'static, ()> {
+        let guard = lock_fingerprint_for_tests();
+        let _ = crate::write_fingerprint::clear_write_fingerprint();
+        guard
     }
 
     #[test]
     fn detect_returns_none_when_no_signals() {
         // 没有指纹、没有 sentinel、cc-switch.db 检查关闭 → 不应检测到
-        let _guard = FingerprintDirGuard::new();
+        let _guard = setup_locked();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         fs::write(home.join("config.toml"), "model = \"gpt-5\"\n").expect("写 config 失败");
@@ -219,7 +204,7 @@ mod tests {
 
     #[test]
     fn detect_flags_cc_switch_catalog_sentinel() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = setup_locked();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         // 含 cc-switch catalog sentinel
@@ -240,7 +225,7 @@ mod tests {
 
     #[test]
     fn detect_flags_cc_switch_web_search_sentinel() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = setup_locked();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         let config = "model = \"x\"\nweb_search = \"disabled\"\n";
@@ -257,7 +242,7 @@ mod tests {
 
     #[test]
     fn detect_flags_hash_mismatch() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = setup_locked();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
 
@@ -285,7 +270,7 @@ mod tests {
 
     #[test]
     fn detect_returns_empty_when_fingerprint_missing() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = setup_locked();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         fs::write(home.join("config.toml"), "model = \"gpt-5\"\n").expect("写 config 失败");

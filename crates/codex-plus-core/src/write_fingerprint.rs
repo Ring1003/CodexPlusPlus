@@ -7,7 +7,7 @@
 //! 不污染 BackendSettings，用 `atomic_write` 保证原子性。
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -29,34 +29,24 @@ pub struct WriteFingerprint {
 }
 
 /// 默认指纹文件路径：`~/.codex-session-delete/write-fingerprint.json`
-///
-/// 测试时可通过 `set_fingerprint_path_for_tests` 重定向到临时目录，避免并行竞争。
 pub fn default_write_fingerprint_path() -> PathBuf {
-    if let Some(path) = fingerprint_path_for_tests() {
-        return path;
-    }
     paths::default_app_state_dir().join("write-fingerprint.json")
 }
 
-// ── 测试路径重定向（仅测试用，避免并行测试写真实 home 的指纹文件） ──
-static FINGERPRINT_PATH_FOR_TESTS: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+// ── 测试串行锁 ──
+// 所有涉及指纹文件的测试（含 cc_switch_detect、tests/relay_config）必须持有此锁，
+// 串行执行，避免并行测试互相覆盖/清理全局指纹文件。
+// 路径重定向方案在 Windows 上会因 temp 文件竞争失败，故改用全局锁串行。
+#[cfg(test)]
+pub static FINGERPRINT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn fingerprint_path_for_tests() -> Option<PathBuf> {
-    FINGERPRINT_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|path| path.clone())
-}
-
-/// 测试用：重定向指纹文件路径。传入 None 恢复默认。返回上一次的值。
+/// 测试用：获取指纹测试串行锁的 guard。供跨模块测试共享。
+#[cfg(test)]
 #[doc(hidden)]
-pub fn set_fingerprint_path_for_tests(path: Option<PathBuf>) -> Option<PathBuf> {
-    FINGERPRINT_PATH_FOR_TESTS
-        .get_or_init(|| Mutex::new(None))
+pub fn lock_fingerprint_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    FINGERPRINT_TEST_LOCK
         .lock()
-        .ok()
-        .and_then(|mut current| std::mem::replace(&mut *current, path))
+        .unwrap_or_else(|poison| poison.into_inner())
 }
 
 /// 计算 config.toml 内容的哈希（SHA256 前 16 个十六进制字符）
@@ -154,27 +144,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    /// RAII guard：把指纹路径重定向到独立 tempdir，测试结束自动恢复。
-    /// 彻底隔离并行测试对真实 ~/.codex-session-delete 的竞争。
-    struct FingerprintDirGuard {
-        _temp: tempfile::TempDir,
-        prev: Option<PathBuf>,
-    }
-
-    impl FingerprintDirGuard {
-        fn new() -> Self {
-            let temp = tempdir().expect("创建临时指纹目录失败");
-            let fp_path = temp.path().join("write-fingerprint.json");
-            let prev = set_fingerprint_path_for_tests(Some(fp_path));
-            Self { _temp: temp, prev }
-        }
-    }
-
-    impl Drop for FingerprintDirGuard {
-        fn drop(&mut self) {
-            set_fingerprint_path_for_tests(self.prev.take());
-        }
-    }
+    // 纯哈希计算测试不涉及文件，无需持锁。
 
     #[test]
     fn compute_config_hash_is_deterministic() {
@@ -200,10 +170,13 @@ mod tests {
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    // 以下测试涉及全局指纹文件，用串行锁避免并行竞争。
+    // macOS 上并行竞争导致 flaky，Windows 上路径重定向会失败，故统一用锁串行。
+
     #[test]
     fn load_write_fingerprint_returns_none_when_missing() {
-        // 隔离目录下文件不存在应返回 Ok(None)
-        let _guard = FingerprintDirGuard::new();
+        let _guard = lock_fingerprint_for_tests();
+        let _ = clear_write_fingerprint();
         let result = load_write_fingerprint();
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -211,7 +184,7 @@ mod tests {
 
     #[test]
     fn save_and_load_roundtrip() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = lock_fingerprint_for_tests();
         let fingerprint = WriteFingerprint {
             written_at_millis: 1_700_000_000_000,
             config_hash: "abc123def456abc0".to_string(),
@@ -220,11 +193,12 @@ mod tests {
         save_write_fingerprint(&fingerprint).expect("保存指纹失败");
         let loaded = load_write_fingerprint().expect("加载指纹失败");
         assert_eq!(loaded, Some(fingerprint));
+        let _ = clear_write_fingerprint();
     }
 
     #[test]
     fn record_write_fingerprint_reads_live_config() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = lock_fingerprint_for_tests();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         fs::write(home.join("config.toml"), "model = \"test\"\n").expect("写 config 失败");
@@ -234,11 +208,12 @@ mod tests {
         let loaded = load_write_fingerprint().expect("加载指纹失败");
         let fingerprint = loaded.expect("应有指纹");
         assert_eq!(fingerprint.config_hash, compute_config_hash("model = \"test\"\n"));
+        let _ = clear_write_fingerprint();
     }
 
     #[test]
     fn clear_write_fingerprint_is_idempotent() {
-        let _guard = FingerprintDirGuard::new();
+        let _guard = lock_fingerprint_for_tests();
         // 连续清除不应报错
         clear_write_fingerprint().expect("第一次清除失败");
         clear_write_fingerprint().expect("第二次清除失败");
