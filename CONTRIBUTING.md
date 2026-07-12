@@ -6,7 +6,7 @@ Thank you for your interest in contributing to CodexPlusPlus!
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/BigPizzaV3/CodexPlusPlus.git
+   git clone https://github.com/Ring1003/CodexPlusPlus.git
    cd CodexPlusPlus
    ```
 

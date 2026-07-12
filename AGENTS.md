@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-本仓库是 [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) 的 fork，目标是实现「按模型粒度配置上下文窗口与自动压缩阈值」feature（对应 issue #1171 / #931）。
+本仓库是 [Ring1003/CodexPlusPlus](https://github.com/Ring1003/CodexPlusPlus) 的 fork，目标是实现「按模型粒度配置上下文窗口与自动压缩阈值」feature（对应 issue #1171 / #931）。
 
 采用 codex 原生 `model_catalog_json` 机制：通过 `model_list` 后缀语法（如 `deepseek-v4-pro[1M]`）声明每模型窗口，由 CodexPlusPlus 生成 catalog 文件并注入 config.toml 指针，codex 客户端运行时按模型识别各自窗口。
 
@@ -53,7 +53,7 @@
 
 ## 与上游同步
 
-- `upstream` = https://github.com/BigPizzaV3/CodexPlusPlus.git
+- `upstream` = https://github.com/Ring1003/CodexPlusPlus.git
 - `origin` = 用户自己的 GitHub fork（待创建）
 - feature 分支命名：`codex/per-model-context` 或类似
 - 定期 `git fetch upstream && git rebase upstream/main` 保持同步

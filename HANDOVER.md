@@ -4,7 +4,7 @@
 
 ### PR #1247: guard port auto-offset for multi-user RDP
 
-**PR:** https://github.com/BigPizzaV3/CodexPlusPlus/pull/1247
+**PR:** https://github.com/Ring1003/CodexPlusPlus/pull/1247
 **Branch:** `fix/guard-port-offset` (on lennney fork)
 
 ### What was done
