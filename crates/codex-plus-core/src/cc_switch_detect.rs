@@ -147,7 +147,14 @@ fn home_cc_switch_db_path() -> std::path::PathBuf {
 
 fn file_modified_secs(path: &Path) -> Option<u64> {
     let metadata = std::fs::metadata(path).ok()?;
-    metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs()
+    Some(
+        metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
 }
 
 fn config_mtime_secs(home: &Path) -> Option<u64> {

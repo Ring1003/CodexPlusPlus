@@ -55,7 +55,14 @@ fn hex_short(bytes: &[u8]) -> String {
 fn config_mtime_secs(home: &Path) -> Option<u64> {
     let config_path = home.join("config.toml");
     let metadata = std::fs::metadata(&config_path).ok()?;
-    metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs()
+    Some(
+        metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
 }
 
 /// 记录当前 config.toml 的指纹（写入后调用）
