@@ -3337,6 +3337,29 @@ fn make_test_home_with_config() -> tempfile::TempDir {
     temp
 }
 
+/// RAII guard：把指纹路径重定向到独立 tempdir，测试结束（含 panic）自动恢复。
+/// 隔离 record_write_fingerprint / detect_external_manager 对真实 home 的污染。
+struct FingerprintDirGuard {
+    _temp: tempfile::TempDir,
+    prev: Option<std::path::PathBuf>,
+}
+
+impl FingerprintDirGuard {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().expect("创建临时指纹目录失败");
+        let prev = codex_plus_core::write_fingerprint::set_fingerprint_path_for_tests(Some(
+            temp.path().join("write-fingerprint.json"),
+        ));
+        Self { _temp: temp, prev }
+    }
+}
+
+impl Drop for FingerprintDirGuard {
+    fn drop(&mut self) {
+        codex_plus_core::write_fingerprint::set_fingerprint_path_for_tests(self.prev.take());
+    }
+}
+
 #[test]
 fn relay_status_from_home_defaults_external_manager_detected_false() {
     // 默认（compat 关闭）external_manager_detected 应恒为 false
@@ -3351,6 +3374,7 @@ fn relay_status_from_home_defaults_external_manager_detected_false() {
 #[test]
 fn relay_status_from_home_with_compat_detects_cc_switch_sentinel() {
     // 开启 compat，且 config 含 cc-switch catalog sentinel → 应检测到
+    let _fp_guard = FingerprintDirGuard::new();
     let temp = tempfile::tempdir().expect("创建临时目录失败");
     let home = temp.path();
     std::fs::create_dir_all(home).unwrap();
@@ -3426,6 +3450,8 @@ fn list_live_backups_returns_entries_newest_first() {
 
 #[test]
 fn rollback_to_backup_restores_config_and_auth() {
+    // 隔离指纹文件，避免 record_write_fingerprint 污染真实 home
+    let _fp_guard = FingerprintDirGuard::new();
     let temp = make_test_home_with_config();
     let home = temp.path();
 

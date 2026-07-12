@@ -171,19 +171,40 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::write_fingerprint::{clear_write_fingerprint, save_write_fingerprint};
+    use crate::write_fingerprint::{
+        WriteFingerprint, compute_config_hash, save_write_fingerprint,
+        set_fingerprint_path_for_tests,
+    };
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
-    /// 构造一个干净的检测基线：清掉指纹、live config 无 sentinel
-    fn cleanup() {
-        let _ = clear_write_fingerprint();
+    /// RAII guard：把指纹路径重定向到独立 tempdir，测试结束自动恢复。
+    /// 彻底隔离并行测试对真实 ~/.codex-session-delete 的竞争。
+    struct FingerprintDirGuard {
+        _temp: tempfile::TempDir,
+        prev: Option<PathBuf>,
+    }
+
+    impl FingerprintDirGuard {
+        fn new() -> Self {
+            let temp = tempdir().expect("创建临时指纹目录失败");
+            let fp_path = temp.path().join("write-fingerprint.json");
+            let prev = set_fingerprint_path_for_tests(Some(fp_path));
+            Self { _temp: temp, prev }
+        }
+    }
+
+    impl Drop for FingerprintDirGuard {
+        fn drop(&mut self) {
+            set_fingerprint_path_for_tests(self.prev.take());
+        }
     }
 
     #[test]
     fn detect_returns_none_when_no_signals() {
         // 没有指纹、没有 sentinel、cc-switch.db 检查关闭 → 不应检测到
-        cleanup();
+        let _guard = FingerprintDirGuard::new();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         fs::write(home.join("config.toml"), "model = \"gpt-5\"\n").expect("写 config 失败");
@@ -194,12 +215,11 @@ mod tests {
             !detection.detected,
             "无任何信号时不应检测到外部管理，detection = {detection:?}"
         );
-        cleanup();
     }
 
     #[test]
     fn detect_flags_cc_switch_catalog_sentinel() {
-        cleanup();
+        let _guard = FingerprintDirGuard::new();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         // 含 cc-switch catalog sentinel
@@ -208,37 +228,36 @@ mod tests {
         );
         fs::write(home.join("config.toml"), config).expect("写 config 失败");
 
-        let detection = detect_external_manager(home);
+        // catalog sentinel 必然命中，用 with_options 关闭 db 检查避免环境干扰
+        let detection = detect_external_manager_with_options(home, false);
         assert!(detection.detected, "应检测到 cc-switch catalog sentinel");
         assert!(
             detection.reasons.iter().any(|r| r.contains("catalog 指针")),
             "原因应含 catalog 指针：{:?}",
             detection.reasons
         );
-        cleanup();
     }
 
     #[test]
     fn detect_flags_cc_switch_web_search_sentinel() {
-        cleanup();
+        let _guard = FingerprintDirGuard::new();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         let config = "model = \"x\"\nweb_search = \"disabled\"\n";
         fs::write(home.join("config.toml"), config).expect("写 config 失败");
 
-        let detection = detect_external_manager(home);
+        let detection = detect_external_manager_with_options(home, false);
         assert!(detection.detected, "应检测到 web_search sentinel");
         assert!(
             detection.reasons.iter().any(|r| r.contains("web_search")),
             "原因应含 web_search：{:?}",
             detection.reasons
         );
-        cleanup();
     }
 
     #[test]
     fn detect_flags_hash_mismatch() {
-        cleanup();
+        let _guard = FingerprintDirGuard::new();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
 
@@ -255,31 +274,29 @@ mod tests {
         // 模拟外部修改：改成内容 B
         fs::write(home.join("config.toml"), "model = \"gpt-6\"\n").expect("改 config 失败");
 
-        let detection = detect_external_manager(home);
+        let detection = detect_external_manager_with_options(home, false);
         assert!(detection.detected, "应检测到 hash 不一致");
         assert!(
             detection.reasons.iter().any(|r| r.contains("内容与 CodexPlusPlus 上次写入不一致")),
             "原因应含 hash 不一致：{:?}",
             detection.reasons
         );
-        cleanup();
     }
 
     #[test]
     fn detect_returns_empty_when_fingerprint_missing() {
-        cleanup();
+        let _guard = FingerprintDirGuard::new();
         let temp = tempdir().expect("创建临时目录失败");
         let home = temp.path();
         fs::write(home.join("config.toml"), "model = \"gpt-5\"\n").expect("写 config 失败");
 
-        let detection = detect_external_manager(home);
-        // 没指纹、没 sentinel、没 cc-switch.db → 不应报 hash/mtime 信号
+        let detection = detect_external_manager_with_options(home, false);
+        // 没指纹、没 sentinel → 不应报 hash/mtime 信号
         let has_fingerprint_signal = detection
             .reasons
             .iter()
             .any(|r| r.contains("CodexPlusPlus 上次写入"));
         assert!(!has_fingerprint_signal, "无指纹时不应报指纹信号：{detection:?}");
-        cleanup();
     }
 
     #[test]
