@@ -3,18 +3,30 @@ name: Release assets
 on:
   release:
     types: [published]
+  # 支持手动触发：tag 必填，指向已存在的 git tag。
+  # 用于 fork 仓库等 release 事件未被分发的场景，也可作为日常发版的备用入口。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（如 v1.2.34）"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+# 统一的 tag 取值：release 事件用 release.tag_name，手动触发用 inputs.tag。
+# 这样两种触发方式都能正确拿到目标 tag，job 内部统一引用 RELEASE_TAG 环境变量。
 jobs:
   windows-installer:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -48,14 +60,14 @@ jobs:
       - name: Build Windows zip asset
         shell: pwsh
         run: |
-          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
+          $version = "${env:RELEASE_TAG}".TrimStart("v", "V")
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           Compress-Archive -Path dist/windows/app/* -DestinationPath "dist/windows/CodexPlusPlus-$version-windows-x64.zip" -Force
 
       - name: Build Windows installer
         shell: pwsh
         run: |
-          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
+          $version = "${env:RELEASE_TAG}".TrimStart("v", "V")
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           if (-not (Test-Path $makensis)) {
             $makensis = "makensis"
@@ -67,7 +79,7 @@ jobs:
       - name: Upload Windows installer
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/windows/*.exe
             dist/windows/*.zip
@@ -75,6 +87,8 @@ jobs:
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +103,7 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -114,14 +128,14 @@ jobs:
 
       - name: Build macOS DMG
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           VERSION="${VERSION#V}"
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
 
       - name: Build macOS zip asset
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           VERSION="${VERSION#V}"
           mkdir -p dist/macos/app-${{ matrix.arch }}
           cp "target/${{ matrix.target }}/release/codex-plus-plus" "dist/macos/app-${{ matrix.arch }}/"
@@ -145,7 +159,7 @@ jobs:
       - name: Upload macOS DMG
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             dist/macos/*.dmg
             dist/macos/*.zip
@@ -153,6 +167,8 @@ jobs:
   latest-json:
     name: Upload static latest.json
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     needs:
       - windows-installer
       - macos-dmg
@@ -161,7 +177,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         shell: bash
         run: |
           set -euo pipefail
@@ -190,7 +206,7 @@ jobs:
       - name: Upload latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ env.RELEASE_TAG }}
           REPO: ${{ github.repository }}
         shell: bash
         run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
