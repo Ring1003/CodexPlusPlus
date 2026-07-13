@@ -146,9 +146,9 @@ jobs:
           mkdir -p dist/macos
           # Tauri 产物路径
           cp target/${{ matrix.target }}/release/bundle/dmg/*.dmg "dist/macos/CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.dmg" 2>/dev/null || true
-          # updater 用的 .app.tar.gz + .sig
-          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz "dist/macos/" 2>/dev/null || true
-          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig "dist/macos/" 2>/dev/null || true
+          # updater 用的 .app.tar.gz + .sig（按架构区分文件名，避免 arm64/x64 互相覆盖）
+          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz "dist/macos/CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.app.tar.gz" 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig "dist/macos/CodexPlusPlus-${VERSION}-macos-${{ matrix.arch }}.app.tar.gz.sig" 2>/dev/null || true
           ls -la dist/macos/
 
       - name: Upload macOS DMG and updater artifacts
@@ -180,6 +180,7 @@ jobs:
           gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,publishedAt > release.json
           node <<'NODE'
           const fs = require("fs");
+          const { execSync } = require("child_process");
           const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
           const repo = process.env.REPO;
           const tag = release.tagName || process.env.TAG;
@@ -188,46 +189,46 @@ jobs:
           const assets = release.assets || [];
 
           // 读 .sig 签名文件内容（Tauri updater 要求 signature 是文件内容字符串）
-          function readSignature(sigAssetName) {
-            const sig = assets.find((a) => a.name === sigAssetName);
-            if (!sig) return null;
-            // 通过 gh api 下载 .sig 文件内容
+          function readSignature(sigAsset) {
             try {
-              const { execSync } = require("child_process");
-              const url = `repos/${process.env.REPO}/releases/assets/${sig.id}`;
+              const url = `repos/${process.env.REPO}/releases/assets/${sigAsset.id}`;
               const content = execSync(`gh api ${url} --jq '.content'`, { encoding: "utf8" }).trim();
               return Buffer.from(content, "base64").toString("utf8").trim();
             } catch (e) {
-              console.error(`Failed to read signature ${sigAssetName}: ${e.message}`);
+              console.error(`Failed to read signature ${sigAsset.name}: ${e.message}`);
               return null;
             }
           }
 
-          function findAsset(predicate) {
-            return assets.find(predicate);
+          // 按「主文件 + 同名 .sig」配对查找
+          // 主文件 = 安装包/.app.tar.gz，签名 = 主文件名 + ".sig"
+          function findPair(namePredicate) {
+            const main = assets.find((a) => a.name.endsWith(".sig") === false && namePredicate(a.name));
+            if (!main) return [null, null];
+            const sig = assets.find((a) => a.name === main.name + ".sig");
+            return [main, sig];
           }
-
-          // Windows: NSIS exe + .sig
-          const winExe = findAsset((a) => a.name.endsWith("-x64-setup.exe") || a.name.endsWith(".exe") && !a.name.endsWith(".sig"));
-          const winSig = winExe ? assets.find((a) => a.name === winExe.name + ".sig") : null;
-          // macOS arm64: .app.tar.gz + .sig
-          const macArmGz = findAsset((a) => a.name.includes("aarch64") || a.name.includes("arm64") && a.name.endsWith(".app.tar.gz"));
-          const macArmSig = macArmGz ? assets.find((a) => a.name === macArmGz.name + ".sig") : null;
-          // macOS x64: .app.tar.gz + .sig
-          const macX64Gz = findAsset((a) => a.name.includes("x86_64") || a.name.includes("x64") && a.name.endsWith(".app.tar.gz"));
-          const macX64Sig = macX64Gz ? assets.find((a) => a.name === macX64Gz.name + ".sig") : null;
 
           const platforms = {};
+
+          // Windows: CodexPlusPlus_<version>_x64-setup.exe（Tauri NSIS 默认命名）
+          const [winExe, winSig] = findPair((n) => n.endsWith("-setup.exe"));
           if (winExe && winSig) {
-            const sig = readSignature(winSig.name);
+            const sig = readSignature(winSig);
             if (sig) platforms["windows-x86_64"] = { signature: sig, url: `${baseUrl}/${winExe.name}` };
           }
+
+          // macOS arm64: CodexPlusPlus-<version>-macos-arm64.app.tar.gz
+          const [macArmGz, macArmSig] = findPair((n) => n.endsWith(".app.tar.gz") && n.includes("arm64"));
           if (macArmGz && macArmSig) {
-            const sig = readSignature(macArmSig.name);
+            const sig = readSignature(macArmSig);
             if (sig) platforms["darwin-aarch64"] = { signature: sig, url: `${baseUrl}/${macArmGz.name}` };
           }
+
+          // macOS x64: CodexPlusPlus-<version>-macos-x64.app.tar.gz
+          const [macX64Gz, macX64Sig] = findPair((n) => n.endsWith(".app.tar.gz") && n.includes("x64"));
           if (macX64Gz && macX64Sig) {
-            const sig = readSignature(macX64Sig.name);
+            const sig = readSignature(macX64Sig);
             if (sig) platforms["darwin-x86_64"] = { signature: sig, url: `${baseUrl}/${macX64Gz.name}` };
           }
 
