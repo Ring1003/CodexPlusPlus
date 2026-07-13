@@ -320,6 +320,9 @@ pub struct BackendSettings {
     #[serde(rename = "ccSwitchCompatEnabled", default)]
     /// cc-switch 兼容感知开关：开启后检测外部工具对 codex 配置的修改并允许回滚
     pub cc_switch_compat_enabled: bool,
+    #[serde(rename = "crossProviderRoutingEnabled", default)]
+    /// 跨供应商模型路由：开启后在 Codex 页面可直接切换不同供应商的模型
+    pub cross_provider_routing_enabled: bool,
 }
 
 impl Default for BackendSettings {
@@ -380,6 +383,7 @@ impl Default for BackendSettings {
             active_aggregate_relay_id: String::new(),
             relay_test_model: default_relay_test_model(),
             cc_switch_compat_enabled: false,
+            cross_provider_routing_enabled: false,
         }
     }
 }
@@ -980,6 +984,7 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
         );
     }
     merge_bool_setting(target, source, "ccSwitchCompatEnabled");
+    merge_bool_setting(target, source, "crossProviderRoutingEnabled");
 }
 
 fn merge_bool_setting(target: &mut Map<String, Value>, source: &Map<String, Value>, key: &str) {

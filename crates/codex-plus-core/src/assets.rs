@@ -28,8 +28,9 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     let paste_fix = paste_fix_enabled_config(settings);
     let force_chinese_locale = force_chinese_locale_config(settings);
     let fast_startup = fast_startup_config(settings);
+    let cross_provider = cross_provider_routing_config(settings);
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CODEX_PLUS_VERSION__ = {};\nwindow.__CODEX_PLUS_BUILD__ = {};\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = {};\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = {};\nwindow.__CODEX_PLUS_PASTE_FIX__ = {};\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = {};\nwindow.__CODEX_PLUS_FAST_STARTUP__ = {};\n{}\n{}",
+        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CODEX_PLUS_VERSION__ = {};\nwindow.__CODEX_PLUS_BUILD__ = {};\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = {};\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = {};\nwindow.__CODEX_PLUS_PASTE_FIX__ = {};\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = {};\nwindow.__CODEX_PLUS_FAST_STARTUP__ = {};\nwindow.__CODEX_PLUS_CROSS_PROVIDER__ = {};\n{}\n{}",
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
         serde_json::to_string(crate::version::VERSION).expect("version should serialize"),
         serde_json::to_string(DIAGNOSTIC_BUILD_ID).expect("build id should serialize"),
@@ -39,6 +40,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
         serde_json::to_string(&force_chinese_locale)
             .expect("force Chinese locale config should serialize"),
         serde_json::to_string(&fast_startup).expect("fast startup config should serialize"),
+        serde_json::to_string(&cross_provider).expect("cross provider config should serialize"),
         renderer_script(),
         stepwise_script(),
     )
@@ -257,6 +259,11 @@ pub fn force_chinese_locale_config(settings: &BackendSettings) -> Value {
 
 pub fn fast_startup_config(settings: &BackendSettings) -> Value {
     json!({ "enabled": settings.codex_app_fast_startup, "statsigTimeoutMs": 800 })
+}
+
+/// 跨供应商路由配置：开启后注入脚本 patch fetch，第三方模型请求改写到本地代理
+fn cross_provider_routing_config(settings: &BackendSettings) -> Value {
+    json!({ "enabled": settings.cross_provider_routing_enabled, "proxyPort": crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT })
 }
 
 fn image_data_uri(mime_type: &str, bytes: &[u8]) -> String {

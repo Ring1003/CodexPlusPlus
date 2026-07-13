@@ -8681,4 +8681,86 @@ if (window.__CODEX_PLUS_PASTE_FIX__ && window.__CODEX_PLUS_PASTE_FIX__.enabled =
     document.addEventListener('paste', handler, { capture: true });
     console.log(TAG, 'paste handler installed (capture phase)');
   })();
-}
+
+  // ── 跨供应商模型路由 ──
+  // 注入脚本 patch window.fetch：第三方模型（model 带供应商前缀 "DeepSeek / xxx"）
+  // 的请求改写到本地代理（127.0.0.1:57321），代理按前缀路由到对应供应商上游。
+  // 官方模型（无前缀）的请求原样直连 api.openai.com，不碰代理。
+  function installCrossProviderRouting() {
+    const config = window.__CODEX_PLUS_CROSS_PROVIDER__;
+    if (!config || config.enabled !== true) return;
+    if (window.__codexPlusCrossProviderPatched === "1") return;
+    window.__codexPlusCrossProviderPatched = "1";
+
+    const PROXY_PORT = config.proxyPort || 57321;
+    const PROXY_BASE = `http://127.0.0.1:${PROXY_PORT}`;
+
+    // 判断 URL 是否是 Codex 的 API 请求（发往官方 /responses 或 /chat/completions）
+    const isCodexApiRequest = (input) => {
+      try {
+        const url = new URL(typeof input === "string" ? input : input?.url ?? "", window.location.href);
+        // 匹配 api.openai.com 或 chgpt.com/backend 的 API 请求
+        const isApiHost = url.hostname === "api.openai.com" ||
+                          url.hostname.endsWith(".openai.com") ||
+                          (url.hostname.endsWith("chatgpt.com") && url.pathname.includes("/backend"));
+        const isApiPath = url.pathname.includes("/responses") || url.pathname.includes("/chat/completions");
+        return isApiHost && isApiPath;
+      } catch { return false; }
+    };
+
+    // 从请求体提取 model 字段
+    const extractModelFromBody = (body) => {
+      if (!body) return null;
+      try {
+        if (typeof body === "string") {
+          const parsed = JSON.parse(body);
+          return parsed?.model ?? null;
+        }
+        // body 可能是 URLSearchParams / FormData / Blob 等，无法解析时返回 null
+        return null;
+      } catch { return null; }
+    };
+
+    // 把 URL 的 host 改成本地代理（保留路径）
+    const rewriteToProxy = (input) => {
+      try {
+        const url = new URL(typeof input === "string" ? input : input?.url, window.location.href);
+        url.hostname = "127.0.0.1";
+        url.port = String(PROXY_PORT);
+        url.protocol = "http:";
+        if (typeof input === "string") return url.toString();
+        // Request 对象：返回新 URL 字符串（fetch 接受字符串）
+        return url.toString();
+      } catch {
+        return input; // 解析失败不改写
+      }
+    };
+
+    if (typeof window.fetch === "function" && !window.fetch.__codexPlusCrossProviderPatched) {
+      const originalFetch = window.fetch.bind(window);
+      const patchedFetch = (input, init) => {
+        // 只拦截 Codex API 请求
+        if (!isCodexApiRequest(input)) return originalFetch(input, init);
+        // 从请求体提取 model
+        const model = extractModelFromBody(init?.body);
+        // model 带供应商前缀（包含 " / "）→ 改写到代理
+        if (model && typeof model === "string" && model.includes(" / ")) {
+          const proxyUrl = rewriteToProxy(input);
+          return originalFetch(proxyUrl, init);
+        }
+        // 官方模型（无前缀）→ 原样直连，不碰代理
+        return originalFetch(input, init);
+      };
+      patchedFetch.__codexPlusCrossProviderPatched = true;
+      window.fetch = patchedFetch;
+      console.log("[CodexPlus++] cross-provider routing fetch patch installed");
+    }
+  }
+
+  // 延迟安装（等 Codex 页面完全加载后）
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => installCrossProviderRouting());
+  } else {
+    installCrossProviderRouting();
+  }
+})();

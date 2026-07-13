@@ -1959,6 +1959,29 @@ pub fn relay_profile_api_key(profile: &RelayProfile) -> String {
         .unwrap_or_else(|| profile.api_key.trim().to_string())
 }
 
+/// 代理层专用：从 profile 的 config_contents / auth_contents 提取 API key。
+/// 覆盖所有 relay_mode（Official / MixedApi / PureApi）。
+/// 与 relay_profile_api_key 的区别：这个函数对 PureApi 模式也从 auth_contents 提取 OPENAI_API_KEY。
+pub fn relay_profile_api_key_for_proxy(profile: &RelayProfile) -> String {
+    if profile.relay_mode == crate::settings::RelayMode::Aggregate {
+        return "codex-plus-aggregate".to_string();
+    }
+    // 优先从 auth_contents 提取 OPENAI_API_KEY（覆盖 PureApi 模式）
+    if let Some(key) = codex_auth_api_key(&profile.auth_contents) {
+        if !key.trim().is_empty() {
+            return key;
+        }
+    }
+    // 其次从 config_contents 提取 experimental_bearer_token（覆盖 MixedApi/Official 模式）
+    if let Ok(Some(token)) = experimental_bearer_token_from_config(&profile.config_contents) {
+        if !token.trim().is_empty() {
+            return token.trim().to_string();
+        }
+    }
+    // fallback
+    profile.api_key.trim().to_string()
+}
+
 fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<String> {
     let mut doc = parse_toml_document(&profile.config_contents)?;
     let provider_id = active_or_default_provider_id(&doc);

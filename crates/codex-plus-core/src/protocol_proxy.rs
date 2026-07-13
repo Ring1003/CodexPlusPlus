@@ -502,6 +502,31 @@ async fn open_responses_proxy_request_with_settings_and_user_agent(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+
+    // 跨供应商路由：检查 model 字段是否带供应商前缀（如 "DeepSeek / deepseek-v4-pro"）
+    let raw_model = request_json
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if let Some((provider_prefix, pure_model)) = raw_model.split_once(" / ") {
+        if let Some(relay) =
+            crate::relay_rotation::find_relay_by_provider_prefix(&settings, provider_prefix)
+        {
+            // 找到匹配的供应商 profile，剥离前缀后转发
+            let mut upstream_json = request_json.clone();
+            upstream_json["model"] = Value::String(pure_model.trim().to_string());
+            let upstream_body = serde_json::to_string(&upstream_json)?;
+            return cross_provider_forward(
+                &relay,
+                &upstream_body,
+                is_stream,
+                original_user_agent,
+                UpstreamWireApi::Responses,
+            )
+            .await;
+        }
+    }
+
     let context = RotationContext {
         conversation_id: conversation_id_from_responses_request(&request_json),
     };
@@ -631,6 +656,81 @@ async fn open_responses_proxy_request_with_settings_and_user_agent(
     anyhow::bail!("未找到可用的聚合供应商成员")
 }
 
+/// 跨供应商路由转发：用指定 relay 的 base_url 和 api_key 转发请求。
+async fn cross_provider_forward(
+    relay: &crate::settings::RelayProfile,
+    upstream_body: &str,
+    is_stream: bool,
+    original_user_agent: Option<&str>,
+    wire_api: UpstreamWireApi,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    use crate::relay_config::relay_profile_api_key_for_proxy;
+
+    let api_key = relay_profile_api_key_for_proxy(relay);
+    let base_url = relay_base_url_for_proxy(relay);
+    let endpoint = match wire_api {
+        UpstreamWireApi::Responses => responses_url(&base_url),
+        UpstreamWireApi::ChatCompletions => chat_completions_url(&base_url),
+    };
+
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        "protocol_proxy.cross_provider_request",
+        json!({
+            "relayId": relay.id,
+            "relayName": relay.name,
+            "endpoint": endpoint,
+            "wireApi": wire_api,
+            "stream": is_stream,
+        }),
+    );
+
+    let client = crate::http_client::proxied_client(&effective_user_agent(
+        &relay.user_agent,
+        original_user_agent,
+    ))?;
+    let timeout = response_header_timeout(is_stream);
+    let response = tokio::time::timeout(
+        timeout,
+        client
+            .post(&endpoint)
+            .bearer_auth(api_key.trim())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .body(upstream_body.to_string())
+            .send(),
+    )
+    .await
+    .with_context(|| format!("跨供应商请求超过 {} 秒未返回响应头", timeout.as_secs()))?
+    .context("跨供应商请求失败")?;
+
+    let status_code = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(UpstreamProxyResponse {
+        status_code,
+        is_stream: is_stream || content_type.contains("text/event-stream"),
+        content_type,
+        wire_api,
+        response,
+    })
+}
+
+/// 获取 relay 的实际上游 base_url（排除本地代理地址）
+fn relay_base_url_for_proxy(relay: &crate::settings::RelayProfile) -> String {
+    // ChatCompletions 协议的 relay，其 base_url 在 config 里被写成了本地代理地址
+    // 真正的上游地址在 upstream_base_url 或 config_contents 里
+    if !relay.upstream_base_url.trim().is_empty() {
+        return relay.upstream_base_url.trim().to_string();
+    }
+    relay.base_url.trim().to_string()
+}
+
 pub async fn open_models_proxy_request(
     original_user_agent: Option<&str>,
 ) -> anyhow::Result<UpstreamProxyResponse> {
@@ -695,6 +795,31 @@ pub async fn open_chat_completions_proxy_request(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+
+    // 跨供应商路由：检查 model 字段是否带供应商前缀（如 "DeepSeek / deepseek-v4-pro"）
+    let raw_model = request_json
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if let Some((provider_prefix, pure_model)) = raw_model.split_once(" / ") {
+        if let Some(prefix_relay) =
+            crate::relay_rotation::find_relay_by_provider_prefix(&settings, provider_prefix)
+        {
+            // 找到匹配的供应商 profile，剥离前缀后转发
+            let mut upstream_json = request_json.clone();
+            upstream_json["model"] = Value::String(pure_model.trim().to_string());
+            let upstream_body = serde_json::to_string(&upstream_json)?;
+            return cross_provider_forward(
+                &prefix_relay,
+                &upstream_body,
+                is_stream,
+                original_user_agent,
+                UpstreamWireApi::ChatCompletions,
+            )
+            .await;
+        }
+    }
+
     let upstream = crate::http_client::proxied_client(&effective_user_agent(
         &relay.user_agent,
         original_user_agent,

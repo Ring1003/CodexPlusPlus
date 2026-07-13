@@ -21,6 +21,9 @@ export const EN_PLAIN: Record<string, string> = {
   "CodexPlusPlus 的部分设置（上下文窗口、压缩阈值、catalog 指针等）可能已被 cc-switch 覆盖。":
     "Some CodexPlusPlus settings (context window, compaction threshold, catalog pointer, etc.) may have been overwritten by cc-switch.",
   "cc-switch 兼容感知": "cc-switch compat awareness",
+  "跨供应商模型路由": "Cross-provider model routing",
+  "默认关闭；开启后在 Codex 页面可直接切换不同供应商的模型（带供应商前缀），第三方请求经本地代理路由，官方请求直连不受影响。":
+    "Off by default. When enabled, you can switch between different providers' models directly in the Codex page (with provider prefix). Third-party requests are routed through the local proxy; official requests connect directly and are not affected.",
   "默认关闭；开启后检测 cc-switch 对 codex 配置的修改，并在被覆盖后允许回滚到上次 CodexPlusPlus 写入前的状态。":
     "Off by default. When enabled, detects modifications by cc-switch to codex config and allows rolling back to the state before the last CodexPlusPlus write after an overwrite.",
   "检测到 cc-switch 可能修改了 codex 配置":

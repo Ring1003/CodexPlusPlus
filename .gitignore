@@ -29,3 +29,6 @@ pnpm-workspace.yaml
 *.bak-*
 *.removed-*
 
+
+# 本地实现计划文档（不入库）
+.local-plans/

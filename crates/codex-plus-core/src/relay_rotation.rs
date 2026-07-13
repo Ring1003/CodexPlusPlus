@@ -333,3 +333,21 @@ fn relay_profile_by_id(settings: &BackendSettings, relay_id: &str) -> Option<Rel
         .find(|profile| profile.id == relay_id)
         .cloned()
 }
+
+/// 按供应商名（前缀）查找 relay profile。
+/// 用于跨供应商路由：model 字段格式为 "DeepSeek / deepseek-v4-pro"，
+/// 前缀 "DeepSeek" 匹配 profile.name。
+pub fn find_relay_by_provider_prefix(
+    settings: &BackendSettings,
+    prefix: &str,
+) -> Option<RelayProfile> {
+    let prefix = prefix.trim();
+    if prefix.is_empty() {
+        return None;
+    }
+    settings
+        .relay_profiles
+        .iter()
+        .find(|p| p.name.trim() == prefix)
+        .cloned()
+}

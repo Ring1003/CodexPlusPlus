@@ -1,5 +1,15 @@
 # 更新日志
 
+## 1.0.8 - 2026-07-13
+
+跨供应商模型路由（实验性）+ 预设清理。
+
+- **跨供应商模型路由（feature flag，默认关闭）**：在 Codex 增强页开启「跨供应商模型路由」后，注入脚本 patch fetch，第三方模型（带供应商前缀如 `DeepSeek / deepseek-v4-pro`）的 API 请求自动改写到本地代理，代理按前缀路由到对应供应商上游。官方模型（无前缀）直连 api.openai.com 不受影响。
+  - 代理层新增 `find_relay_by_provider_prefix`（按供应商前缀查找 profile）+ `relay_profile_api_key_for_proxy`（统一提取 api_key）
+  - 代理收到带前缀的 model 后剥离前缀，转发纯模型名给上游
+  - 官方请求零代理介入，token 不碰代理进程
+- **预设清理**：去除所有中转站预配置，仅保留 OpenAI 官方、DeepSeek、智谱 GLM、Kimi Code + 一个通用的 OpenAI 兼容接口预设。
+
 ## 1.0.7 - 2026-07-13
 
 修复 Tauri 打包后概览页「静默启动入口」「管理工具入口」显示缺失的问题。

@@ -187,6 +187,7 @@ type BackendSettings = {
   activeRelayId: string;
   relayTestModel: string;
   ccSwitchCompatEnabled: boolean;
+  crossProviderRoutingEnabled: boolean;
 };
 
 type ZedOpenStrategy = "addToFocusedWorkspace" | "reuseWindow" | "newWindow" | "default";
@@ -719,6 +720,7 @@ const defaultSettings: BackendSettings = {
   activeAggregateRelayId: "",
   relayTestModel: "gpt-5.4-mini",
   ccSwitchCompatEnabled: false,
+  crossProviderRoutingEnabled: false,
 };
 
 export function App() {
@@ -2707,6 +2709,17 @@ function EnhanceScreen({
             <span>
               <strong>{t("cc-switch 兼容感知")}</strong>
               <small>{t("默认关闭；开启后检测 cc-switch 对 codex 配置的修改，并在被覆盖后允许回滚到上次 CodexPlusPlus 写入前的状态。")}</small>
+            </span>
+          </label>
+          <label className="switch-row">
+            <input
+              checked={form.crossProviderRoutingEnabled}
+              onChange={(event) => onFormChange({ ...form, crossProviderRoutingEnabled: event.currentTarget.checked })}
+              type="checkbox"
+            />
+            <span>
+              <strong>{t("跨供应商模型路由")}</strong>
+              <small>{t("默认关闭；开启后在 Codex 页面可直接切换不同供应商的模型（带供应商前缀），第三方请求经本地代理路由，官方请求直连不受影响。")}</small>
             </span>
           </label>
           <ModeSelector launchMode={form.launchMode} actions={actions} />
