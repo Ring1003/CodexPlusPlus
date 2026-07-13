@@ -189,11 +189,11 @@ jobs:
           const assets = release.assets || [];
 
           // 读 .sig 签名文件内容（Tauri updater 要求 signature 是文件内容字符串）
+          // 直接从 release download URL 下载（避免 gh api asset id 格式不匹配）
           function readSignature(sigAsset) {
             try {
-              const url = `repos/${process.env.REPO}/releases/assets/${sigAsset.id}`;
-              const content = execSync(`gh api ${url} --jq '.content'`, { encoding: "utf8" }).trim();
-              return Buffer.from(content, "base64").toString("utf8").trim();
+              const sigUrl = `${baseUrl}/${encodeURIComponent(sigAsset.name)}`;
+              return execSync(`curl -sL "${sigUrl}"`, { encoding: "utf8" }).trim();
             } catch (e) {
               console.error(`Failed to read signature ${sigAsset.name}: ${e.message}`);
               return null;
