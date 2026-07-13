@@ -49,7 +49,8 @@ jobs:
         run: |
           # 单独编译 launcher 二进制，然后重命名为 Tauri sidecar 要求的带 triple 后缀的文件名
           cargo build --release -p codex-plus-plus
-          $sidecarDir = "apps/codex-plus-manager/src-tauri"
+          # externalBin 指向 ../../codex-plus-launcher/codex-plus-plus，sidecar 文件放在 codex-plus-launcher 目录
+          $sidecarDir = "apps/codex-plus-launcher"
           New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
           # Tauri externalBin 会在运行时找 codex-plus-plus-x86_64-pc-windows-msvc.exe
           Copy-Item "target/release/codex-plus-plus.exe" "$sidecarDir/codex-plus-plus-x86_64-pc-windows-msvc.exe" -Force
@@ -127,7 +128,8 @@ jobs:
         run: |
           # 编译 launcher 并重命名为 sidecar 文件名
           cargo build --release --target ${{ matrix.target }} -p codex-plus-plus
-          sidecar_dir="apps/codex-plus-manager/src-tauri"
+          # externalBin 指向 ../../codex-plus-launcher/codex-plus-plus，sidecar 文件放在 codex-plus-launcher 目录
+          sidecar_dir="apps/codex-plus-launcher"
           mkdir -p "$sidecar_dir"
           cp "target/${{ matrix.target }}/release/codex-plus-plus" "$sidecar_dir/codex-plus-plus-${{ matrix.target }}"
 
