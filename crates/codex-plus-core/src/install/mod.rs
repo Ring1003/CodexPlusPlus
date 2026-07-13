@@ -132,12 +132,23 @@ pub fn default_install_root() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let sys_apps = PathBuf::from("/Applications");
+        // 旧双-.app 模式 或 Tauri single-bundle 模式（当前 exe 所在 .app）
         if sys_apps.join(format!("{SILENT_NAME}.app")).exists()
             || sys_apps.join(format!("{MANAGER_NAME}.app")).exists()
         {
             return Some(sys_apps);
         }
         if let Ok(exe) = std::env::current_exe() {
+            // Tauri single-bundle：检查当前 exe 所在的 .app 是否在 /Applications
+            if let Some((dir, app_name)) = macos_applications_dir_and_app_name_from_exe(&exe) {
+                if is_macos_applications_dir(&dir) {
+                    return Some(dir);
+                }
+                // 也检查 .app 是否已装到 /Applications
+                if sys_apps.join(&app_name).exists() {
+                    return Some(sys_apps);
+                }
+            }
             if let Some(dir) = macos_applications_dir_from_exe(&exe) {
                 if is_macos_applications_dir(&dir) {
                     return Some(dir);
@@ -225,7 +236,18 @@ fn entrypoint_candidates(root: &Option<PathBuf>, manager: bool) -> Vec<PathBuf> 
     if cfg!(windows) {
         vec![root.join(format!("{name}.lnk"))]
     } else if cfg!(target_os = "macos") {
-        vec![root.join(format!("{name}.app"))]
+        // Tauri single-bundle 模式下只有一个 <productName>.app，silent 和 manager 都指向它。
+        // 候选顺序：当前 exe 所在的 .app（productName 派生，自适应）→ 旧的双 .app 名
+        let mut candidates = vec![root.join(format!("{name}.app"))];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some((_, app_name)) = macos_applications_dir_and_app_name_from_exe(&exe) {
+                let current_app = root.join(&app_name);
+                if current_app != candidates[0] {
+                    candidates.insert(0, current_app);
+                }
+            }
+        }
+        candidates
     } else {
         vec![root.join(format!("{name}.desktop"))]
     }

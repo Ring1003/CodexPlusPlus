@@ -1,5 +1,12 @@
 # 更新日志
 
+## 1.0.7 - 2026-07-13
+
+修复 Tauri 打包后概览页「静默启动入口」「管理工具入口」显示缺失的问题。
+
+- **entrypoint_candidates**：macOS 候选列表新增「当前 exe 所在的 .app」（productName 派生，自适应），Tauri single-bundle 模式下 silent 和 manager 都指向同一个 `CodexPlusPlus.app`，两项均显示已安装。
+- **default_install_root**：macOS 路径推断新增对当前 exe 所在 `.app` 的识别，不再只认旧的 `Codex++.app` / `Codex++ 管理工具.app`。
+
 ## 1.0.6 - 2026-07-13
 
 修复 v1.0.5 Tauri bundler 改造后遗留的打包逻辑问题。
