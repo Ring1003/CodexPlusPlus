@@ -1,5 +1,13 @@
 # 更新日志
 
+## 1.0.6 - 2026-07-13
+
+修复 v1.0.5 Tauri bundler 改造后遗留的打包逻辑问题。
+
+- **P0 修复 macOS companion 路径解析**：Tauri single-bundle 模式下（launcher 作为 sidecar 与 manager 同在 `<productName>.app/Contents/MacOS/` 内），旧的 `macos_companion_binary_from_exe` 假设两个独立 `.app`，导致打包后找不到 launcher。重写为：优先在当前 MacOS 目录用 `find_sidecar_binary` 找 sidecar；manager 用 productName 派生名（`<app_name>.app` 去后缀）定位。
+- **P0 修复 launcher 找 manager**：Tauri 打包后 manager 可执行名是 productName 派生（`CodexPlusPlus`），不是旧的 `codex-plus-plus-manager`。从 `.app` 名推导 productName 作为候选。
+- **P2 UI 文案**：AboutScreen 标题「GitHub Release 更新」→「在线升级」；删除死字段（资源/进度 Metric，Tauri updater 格式不再有 assetName）；placeholder 改为「在线升级会自动下载并安装，无需手动操作」；notice 标题同步。
+
 ## 1.0.5 - 2026-07-12
 
 把更新机制从「下载全量安装包重新安装」改为 Tauri 官方 updater 在线升级。

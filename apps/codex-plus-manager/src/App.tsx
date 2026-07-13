@@ -1350,7 +1350,7 @@ export function App() {
     if (result) {
       setUpdate(result);
       if (!silent || result.updateAvailable) {
-        showNotice(t("GitHub Release 检查"), result.message, result.status);
+        showNotice(t("在线升级检查"), result.message, result.status);
       }
     }
   };
@@ -3427,16 +3427,14 @@ function AboutScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title={t("GitHub Release 更新")} detail={tf("当前版本 {0}", [overview?.current_version ?? update?.currentVersion ?? "-"])} />
+        <CardHead title={t("在线升级")} detail={tf("当前版本 {0}", [overview?.current_version ?? update?.currentVersion ?? "-"])} />
         <CardContent>
           <div className="metric-list">
             <Metric label={t("状态")} value={update?.status ?? "not_checked"} />
             <Metric label={t("最新版本")} value={update?.latestVersion ?? t("未检查")} />
-            <Metric label={t("资源")} value={update?.assetName ?? "-"} />
-            <Metric label={t("进度")} value={`${update?.progress ?? 0}%`} />
           </div>
-          <Textarea className="log-view" readOnly value={update?.releaseSummary || update?.message || t("尚未检查 GitHub Release；更新会下载并启动安装包。")} />
-          <TaskProgressBox completedTitle={t("上次更新结果")} progress={updateInstallProgress} title={t("安装包更新进度")} />
+          <Textarea className="log-view" readOnly value={update?.releaseSummary || update?.message || t("尚未检查更新；在线升级会自动下载并安装，无需手动操作。")} />
+          <TaskProgressBox completedTitle={t("上次更新结果")} progress={updateInstallProgress} title={t("在线升级进度")} />
           <Toolbar>
             <Button onClick={() => void actions.checkUpdate()}>{t("检查更新")}</Button>
             <Button disabled={updateInstallProgress.active} variant="secondary" onClick={() => void actions.performUpdate()}>
@@ -5294,7 +5292,7 @@ function routeSubtitle(route: Route) {
     zedRemote: t("管理 Codex SSH 项目并加入 Zed workspace"),
     userScripts: t("内置和用户自定义脚本清单"),
     maintenance: t("入口安装、修复、Watcher 与手动启动"),
-    about: t("版本信息、项目链接、GitHub Release 更新、日志与诊断"),
+    about: t("版本信息、项目链接、在线升级、日志与诊断"),
     settings: t("主题和启动参数"),
   };
   return subtitles[route];

@@ -298,7 +298,16 @@ fn find_sidecar_binary(dir: &Path, binary: &str, suffix: &str) -> Option<PathBuf
 
 fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> {
     let (applications_dir, app_name) = macos_applications_dir_and_app_name_from_exe(exe)?;
+    // single-bundle 模式：Tauri 打包后 exe 在 <productName>.app/Contents/MacOS/ 内，
+    // launcher 作为 sidecar 也在同目录（带 target triple 后缀），manager 就是 productName 派生名。
+    // 兼容旧的双 .app 模式：Codex++.app / Codex++ 管理工具.app（独立安装）。
     if binary == SILENT_BINARY {
+        // launcher 的多种可能位置，按优先级查找
+        // 1. 当前 bundle 内的 sidecar（Tauri single-bundle 模式）
+        if let Some(sidecar) = find_sidecar_in_macos_dir(exe) {
+            return Some(sidecar);
+        }
+        // 2. 旧双-bundle 模式：Codex++.app
         if app_name == format!("{SILENT_NAME}.app") {
             return Some(macos_preferred_bundle_binary(
                 exe,
@@ -306,19 +315,39 @@ fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> 
                 "CodexPlusPlus",
             ));
         }
+        // 3. 从 /Applications/Codex++.app 查找（旧独立安装）
         let macos = applications_dir
             .join(format!("{SILENT_NAME}.app"))
             .join("Contents")
             .join("MacOS");
-        return Some(
-            macos
-                .join(SILENT_BINARY)
-                .exists()
-                .then(|| macos.join(SILENT_BINARY))
-                .unwrap_or_else(|| macos.join("CodexPlusPlus")),
-        );
+        if macos.join(SILENT_BINARY).exists() {
+            return Some(macos.join(SILENT_BINARY));
+        }
+        if macos.join("CodexPlusPlus").exists() {
+            return Some(macos.join("CodexPlusPlus"));
+        }
+        // 4. 都找不到返回 None，让外层 find_sidecar_binary 兜底
+        return None;
     }
     if binary == MANAGER_BINARY {
+        // manager 的多种可能位置
+        // 1. Tauri single-bundle 模式：manager 可执行名 = productName = <app_name 去掉 .app>
+        //    launcher (sidecar) 和 manager 都在 <productName>.app/Contents/MacOS/ 内
+        let macos_dir = exe.parent();
+        if let Some(dir) = macos_dir {
+            // productName 派生名：app_name 是 <productName>.app
+            let product_name = app_name.strip_suffix(".app").unwrap_or(&app_name);
+            let manager_candidate = dir.join(product_name);
+            if manager_candidate.exists() {
+                return Some(manager_candidate);
+            }
+            // 也尝试旧的 manager 二进制名（开发模式）
+            let legacy_candidate = dir.join(MANAGER_BINARY);
+            if legacy_candidate.exists() {
+                return Some(legacy_candidate);
+            }
+        }
+        // 2. 旧双-bundle 模式：Codex++ 管理工具.app
         if app_name == format!("{MANAGER_NAME}.app") {
             return Some(macos_preferred_bundle_binary(
                 exe,
@@ -326,19 +355,27 @@ fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> 
                 "CodexPlusPlusManager",
             ));
         }
+        // 3. 从 /Applications/Codex++ 管理工具.app 查找（旧独立安装）
         let macos = applications_dir
             .join(format!("{MANAGER_NAME}.app"))
             .join("Contents")
             .join("MacOS");
-        return Some(
-            macos
-                .join(MANAGER_BINARY)
-                .exists()
-                .then(|| macos.join(MANAGER_BINARY))
-                .unwrap_or_else(|| macos.join("CodexPlusPlusManager")),
-        );
+        if macos.join(MANAGER_BINARY).exists() {
+            return Some(macos.join(MANAGER_BINARY));
+        }
+        if macos.join("CodexPlusPlusManager").exists() {
+            return Some(macos.join("CodexPlusPlusManager"));
+        }
+        return None;
     }
     None
+}
+
+/// 在 macOS bundle 的 MacOS 目录内查找 sidecar（带 target triple 后缀）。
+/// 用于 Tauri single-bundle 模式：launcher 作为 sidecar 与 manager 同目录。
+fn find_sidecar_in_macos_dir(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?;
+    find_sidecar_binary(macos_dir, SILENT_BINARY, "")
 }
 
 fn macos_preferred_bundle_binary(
