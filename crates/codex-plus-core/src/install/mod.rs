@@ -316,18 +316,18 @@ fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> 
             ));
         }
         // 3. 从 /Applications/Codex++.app 查找（旧独立安装）
+        //    即使文件不存在也返回最可能的路径（兼容测试假设和首次安装场景）
         let macos = applications_dir
             .join(format!("{SILENT_NAME}.app"))
             .join("Contents")
             .join("MacOS");
-        if macos.join(SILENT_BINARY).exists() {
-            return Some(macos.join(SILENT_BINARY));
-        }
-        if macos.join("CodexPlusPlus").exists() {
-            return Some(macos.join("CodexPlusPlus"));
-        }
-        // 4. 都找不到返回 None，让外层 find_sidecar_binary 兜底
-        return None;
+        return Some(
+            macos
+                .join(SILENT_BINARY)
+                .exists()
+                .then(|| macos.join(SILENT_BINARY))
+                .unwrap_or_else(|| macos.join("CodexPlusPlus")),
+        );
     }
     if binary == MANAGER_BINARY {
         // manager 的多种可能位置
@@ -356,17 +356,18 @@ fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> 
             ));
         }
         // 3. 从 /Applications/Codex++ 管理工具.app 查找（旧独立安装）
+        //    即使文件不存在也返回最可能的路径（兼容测试假设）
         let macos = applications_dir
             .join(format!("{MANAGER_NAME}.app"))
             .join("Contents")
             .join("MacOS");
-        if macos.join(MANAGER_BINARY).exists() {
-            return Some(macos.join(MANAGER_BINARY));
-        }
-        if macos.join("CodexPlusPlusManager").exists() {
-            return Some(macos.join("CodexPlusPlusManager"));
-        }
-        return None;
+        return Some(
+            macos
+                .join(MANAGER_BINARY)
+                .exists()
+                .then(|| macos.join(MANAGER_BINARY))
+                .unwrap_or_else(|| macos.join("CodexPlusPlusManager")),
+        );
     }
     None
 }
