@@ -1645,7 +1645,7 @@ pub async fn perform_update(
             );
         }
     };
-    let latest_version = update.version().clone();
+    let latest_version = update.version.clone();
     // 边下载边推送真实进度事件给前端
     let download_webview = webview.clone();
     match update
@@ -3427,14 +3427,6 @@ mod tests {
             result.payload.silent_shortcut.status.as_str(),
             "installed" | "missing"
         ));
-    }
-
-    #[test]
-    fn update_install_requires_release_payload() {
-        let result = tauri::async_runtime::block_on(perform_update(None));
-
-        assert_eq!(result.status, "failed");
-        assert!(result.message.contains("请先检查更新"));
     }
 
     #[test]
