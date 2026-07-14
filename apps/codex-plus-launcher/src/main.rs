@@ -137,6 +137,7 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
     let hooks = LauncherHooks::default();
     let settings = hooks.load_settings().await?;
     let app_dir = hooks.resolve_app_dir(options.app_dir.as_deref(), &settings)?;
+    hooks.apply_active_relay_profile(&settings).await?;
     let launch_result = hooks
         .launch_codex(
             &app_dir,
@@ -583,6 +584,39 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         }))
     }
 
+    async fn open_codex(&self) -> anyhow::Result<Value> {
+        // 项目窗口已经由当前 launcher 注入，直接复用它的 helper，避免再次启动 sidecar
+        // 与现有 helper 端口竞争。
+        let debug_port = *self.debug_port.lock().unwrap();
+        let runtime = tokio::runtime::Handle::current();
+        let app_dir = tokio::task::spawn_blocking(move || {
+            runtime.block_on(async move {
+                let hooks = DefaultLaunchHooks::default();
+                let settings = hooks.load_settings().await?;
+                hooks.apply_active_relay_profile(&settings).await?;
+                let app_dir = hooks.resolve_app_dir(None, &settings)?;
+                codex_plus_core::launcher::stop_existing_codex_for_config_reload(&app_dir).await?;
+                hooks
+                    .launch_codex(&app_dir, debug_port, &settings, &settings.codex_extra_args)
+                    .await?;
+                Ok::<_, anyhow::Error>(app_dir)
+            })
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("打开 Codex 任务失败：{error}"))??;
+        let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+            "launcher.project_open_codex_requested",
+            json!({
+                "app_dir": app_dir.to_string_lossy(),
+                "debug_port": debug_port,
+            }),
+        );
+        Ok(json!({
+            "status": "ok",
+            "message": "已应用当前供应商配置，正在重启本地 Codex。"
+        }))
+    }
+
     async fn backend_status(&self) -> anyhow::Result<Value> {
         Ok(
             json!({"status": "ok", "message": "后端已连接", "version": codex_plus_core::version::VERSION}),
@@ -820,6 +854,25 @@ mod tests {
         assert!(source.contains("async fn start_computer_use_guard_watchdog"));
         assert!(source.contains("self.core"));
         assert!(source.contains(".start_computer_use_guard_watchdog(settings)"));
+    }
+
+    #[test]
+    fn project_open_codex_route_applies_configuration_before_opening_codex() {
+        let source = include_str!("main.rs");
+
+        let route_start = source.find("async fn open_codex").unwrap();
+        let route_source = &source[route_start..];
+        let apply_index = route_source
+            .find("hooks.apply_active_relay_profile(&settings).await?")
+            .unwrap();
+        let stop_index = route_source
+            .find("stop_existing_codex_for_config_reload(&app_dir)")
+            .unwrap();
+        let launch_index = route_source.find("hooks.launch_codex(").unwrap();
+
+        assert!(apply_index < stop_index);
+        assert!(stop_index < launch_index);
+        assert!(source.contains("launcher.project_open_codex_requested"));
     }
 
     #[test]

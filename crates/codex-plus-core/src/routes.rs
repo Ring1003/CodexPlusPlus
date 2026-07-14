@@ -76,6 +76,9 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn reload_user_scripts(&self) -> anyhow::Result<Value>;
     async fn open_devtools(&self) -> anyhow::Result<Value>;
     async fn open_manager(&self) -> anyhow::Result<Value>;
+    async fn open_codex(&self) -> anyhow::Result<Value> {
+        anyhow::bail!("当前运行时不支持打开 Codex")
+    }
     async fn backend_status(&self) -> anyhow::Result<Value>;
     async fn codex_model_catalog(&self) -> anyhow::Result<Value>;
     async fn zed_remote_status(&self) -> anyhow::Result<Value>;
@@ -162,6 +165,7 @@ pub async fn handle_bridge_request(
         "/user-scripts/reload" => ctx.runtime.reload_user_scripts().await,
         "/devtools/open" => ctx.runtime.open_devtools().await,
         "/manager/open" => ctx.runtime.open_manager().await,
+        "/codex/open" => ctx.runtime.open_codex().await,
         "/backend/status" => ctx.runtime.backend_status().await,
         "/codex-model-catalog" | "/codex-config-model" => ctx.runtime.codex_model_catalog().await,
         "/diagnostics/log" => diagnostic_log_value(payload.clone()),

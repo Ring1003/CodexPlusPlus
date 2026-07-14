@@ -4,6 +4,9 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -266,6 +269,9 @@ where
                 }),
             );
         }
+        // 由 Codex++ 打开时，先把当前选中的供应商配置写入 Codex Home，
+        // 确保新进程不会沿用上一次的 config.toml / auth.json。
+        hooks.apply_active_relay_profile(&settings).await?;
         if settings.computer_use_guard_enabled {
             hooks.ensure_computer_use_config(&settings).await?;
         }
@@ -1906,6 +1912,36 @@ async fn run_macos_cleanup_command(
         .await
         .with_context(|| format!("failed to request macOS app quit for {}", app_dir.display()))?;
     Ok(())
+}
+
+/// 在重新打开 Codex 前终止当前实例，确保新写入的配置会由新进程读取。
+pub async fn stop_existing_codex_for_config_reload(app_dir: &Path) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        crate::watcher::stop_codex_processes_and_wait();
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if !is_macos_app_running(app_dir).await {
+            return Ok(());
+        }
+        run_macos_cleanup_command(app_dir, MacosCleanupPolicy::QuitIfNotPreviouslyRunning).await?;
+        for _ in 0..50 {
+            if !is_macos_app_running(app_dir).await {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        anyhow::bail!("Codex 未在请求退出后停止，无法安全加载新配置");
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = app_dir;
+        Ok(())
+    }
 }
 
 fn macos_app_dir_from_open_command(command: &[String]) -> Option<PathBuf> {

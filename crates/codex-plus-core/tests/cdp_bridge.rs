@@ -537,6 +537,17 @@ fn injection_script_moves_export_and_project_move_into_more_menu() {
 }
 
 #[test]
+fn injection_script_adds_open_codex_button_to_project_rows() {
+    let script = assets::renderer_script();
+
+    assert!(script.contains("codex-project-open-codex-button"));
+    assert!(script.contains("function refreshProjectOpenCodexButtons()"));
+    assert!(script.contains("sidebarProjectRows().forEach(attachProjectOpenCodexButton)"));
+    assert!(script.contains("postJson(\"/codex/open\", {})"));
+    assert!(script.contains("已应用当前供应商配置，正在重启本地 Codex。"));
+}
+
+#[test]
 fn injection_script_does_not_add_delete_controls_on_archived_page() {
     let script = assets::injection_script(57321);
 

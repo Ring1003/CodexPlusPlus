@@ -1188,7 +1188,7 @@ export function App() {
   const launch = async () => {
     const result = await launchCommand("launch_codex_plus");
     if (result) {
-      showNotice(t("启动任务"), result.message, result.status);
+      showNotice(t("打开 Codex"), result.message, result.status);
       await refreshOverview(true);
     }
   };
@@ -2376,7 +2376,7 @@ function OverviewScreen({
           <Toolbar>
             <Button onClick={() => void actions.launch()}>
               <Rocket className="h-4 w-4" />
-              {t("启动 Codex++")}
+              {t("打开 Codex")}
             </Button>
             <Button variant="secondary" onClick={() => void actions.goLogs()}>
               {t("打开关于")}
@@ -2491,7 +2491,7 @@ function RelayScreen({
             />
             <span>
               <strong>{t("启用供应商配置切换")}</strong>
-              <small>{t("关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。")}</small>
+              <small>{t("开启后，切换供应商或通过本工具打开 Codex 时会写入当前配置；关闭后不会写入 config.toml / auth.json。")}</small>
             </span>
           </label>
           <div className="relay-add-row">
@@ -3391,7 +3391,7 @@ function MaintenanceScreen({
             </Field>
           </div>
           <Toolbar>
-            <Button onClick={() => void actions.launch()}>{t("启动 Codex++")}</Button>
+            <Button onClick={() => void actions.launch()}>{t("打开 Codex")}</Button>
             <Button variant="secondary" onClick={() => void actions.saveManualCodexAppPath()}>
               {t("保存为默认路径")}
             </Button>

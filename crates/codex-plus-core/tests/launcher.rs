@@ -720,7 +720,7 @@ async fn default_helper_accepts_diagnostic_log_events_over_http() {
 }
 
 #[tokio::test]
-async fn launch_lifecycle_runs_enabled_maintenance_without_applying_relay_profile() {
+async fn launch_lifecycle_applies_active_relay_profile_before_opening_codex() {
     let temp = tempfile::tempdir().unwrap();
     let app_dir = temp.path().join("Codex.app");
     std::fs::create_dir_all(&app_dir).unwrap();
@@ -760,6 +760,7 @@ async fn launch_lifecycle_runs_enabled_maintenance_without_applying_relay_profil
             "select-helper:57321",
             "load-settings",
             "provider-sync",
+            "apply-relay",
             "computer-use-guard",
             "start-helper:57321",
             "launch:9229",
@@ -771,7 +772,7 @@ async fn launch_lifecycle_runs_enabled_maintenance_without_applying_relay_profil
         ]
     );
     let events = events.lock().unwrap().clone();
-    assert!(!events.contains(&"apply-relay".to_string()));
+    assert!(events.contains(&"apply-relay".to_string()));
     assert!(events.contains(&"provider-sync".to_string()));
     assert!(events.contains(&"computer-use-guard".to_string()));
     assert!(events.contains(&"computer-use-guard-watchdog".to_string()));
@@ -1004,7 +1005,7 @@ async fn launch_lifecycle_skips_computer_use_guard_by_default() {
 }
 
 #[tokio::test]
-async fn launch_lifecycle_does_not_apply_relay_profile_before_launching_codex() {
+async fn launch_lifecycle_applies_relay_profile_before_launching_codex() {
     let temp = tempfile::tempdir().unwrap();
     let app_dir = temp.path().join("Codex.app");
     std::fs::create_dir_all(&app_dir).unwrap();
@@ -1029,8 +1030,16 @@ async fn launch_lifecycle_does_not_apply_relay_profile_before_launching_codex() 
     handle.wait_for_codex_exit().await.unwrap();
 
     let events = events.lock().unwrap().clone();
-    assert!(!events.contains(&"apply-relay".to_string()));
-    assert!(events.contains(&"launch:9229".to_string()));
+    assert!(
+        events
+            .iter()
+            .position(|event| event == "apply-relay")
+            .unwrap()
+            < events
+                .iter()
+                .position(|event| event == "launch:9229")
+                .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1065,7 +1074,7 @@ async fn launch_lifecycle_skips_active_relay_profile_when_supplier_config_disabl
 }
 
 #[tokio::test]
-async fn launch_lifecycle_tolerates_duplicate_context_parent_tables_without_applying_relay() {
+async fn launch_lifecycle_tolerates_duplicate_context_parent_tables_when_applying_relay() {
     let temp = tempfile::tempdir().unwrap();
     let app_dir = temp.path().join("Codex.app");
     std::fs::create_dir_all(&app_dir).unwrap();
@@ -1111,7 +1120,7 @@ experimental_bearer_token = "sk-test"
     handle.wait_for_codex_exit().await.unwrap();
 
     let events = events.lock().unwrap().clone();
-    assert!(!events.contains(&"apply-relay".to_string()));
+    assert!(events.contains(&"apply-relay".to_string()));
     assert!(!events.contains(&"computer-use-guard".to_string()));
     assert!(events.contains(&"launch:9229".to_string()));
 }

@@ -237,6 +237,7 @@
   const exportButtonClass = "codex-export-button";
   const projectMoveButtonClass = "codex-project-move-button";
   const projectMoveOverlayClass = "codex-project-move-overlay";
+  const projectOpenCodexButtonClass = "codex-project-open-codex-button";
   const actionButtonClass = "codex-session-action-button";
   const actionGroupClass = "codex-session-actions";
   const moreButtonClass = "codex-session-more-button";
@@ -271,6 +272,7 @@
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
+  const codexProjectOpenCodexVersion = "1";
   const codexActionGroupVersion = "5";
   const codexArchiveRowActionsVersion = "1";
   const codexArchiveDeleteAllVersion = "2";
@@ -655,6 +657,19 @@
         z-index: 2147483200;
         background: rgba(15,23,42,.28);
       }
+      .${projectOpenCodexButtonClass} {
+        flex: 0 0 auto;
+        margin-left: 6px;
+        border: 1px solid rgba(148,163,184,.5);
+        border-radius: 5px;
+        background: transparent;
+        color: inherit;
+        font: 11px/1.2 system-ui, sans-serif;
+        padding: 3px 5px;
+        cursor: pointer;
+      }
+      .${projectOpenCodexButtonClass}:hover { background: rgba(148,163,184,.16); }
+      .${projectOpenCodexButtonClass}:disabled { cursor: wait; opacity: .65; }
       .codex-project-move-panel {
         position: fixed;
         width: min(360px, calc(100vw - 32px));
@@ -5054,6 +5069,55 @@
     return projectRow.closest?.('[role="listitem"][aria-label]') || projectRow.closest?.('[role="listitem"]') || projectRow;
   }
 
+  async function openCodexFromProject(button) {
+    if (button.dataset.codexProjectOpenCodexPending === "true") return;
+    button.dataset.codexProjectOpenCodexPending = "true";
+    button.disabled = true;
+    const originalText = button.textContent;
+    button.textContent = "重启中...";
+    try {
+      const result = await postJson("/codex/open", {});
+      if (result?.status === "ok" || result?.status === "accepted") {
+        showToast(result.message || "已应用当前供应商配置，正在重启本地 Codex。", null);
+      } else {
+        showToast(result?.message || "打开 Codex 失败", null);
+      }
+    } catch (error) {
+      showToast(`打开 Codex 失败：${error?.message || error}`, null);
+    } finally {
+      delete button.dataset.codexProjectOpenCodexPending;
+      button.disabled = false;
+      button.textContent = originalText || "打开 Codex";
+    }
+  }
+
+  function attachProjectOpenCodexButton(projectRow) {
+    const listItem = projectRowListItem(projectRow);
+    if (!listItem || listItem.querySelector?.(`.${projectOpenCodexButtonClass}`)) return;
+    const host = projectRow instanceof HTMLButtonElement ? projectRow.parentElement : projectRow;
+    if (!host) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = projectOpenCodexButtonClass;
+    button.dataset.codexProjectOpenCodexVersion = codexProjectOpenCodexVersion;
+    button.title = "应用当前配置后重启本地 Codex";
+    button.textContent = "打开 Codex";
+    ["pointerdown", "mousedown"].forEach((eventName) => {
+      button.addEventListener(eventName, (event) => event.stopPropagation(), true);
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      void openCodexFromProject(button);
+    }, true);
+    host.appendChild(button);
+  }
+
+  function refreshProjectOpenCodexButtons() {
+    sidebarProjectRows().forEach(attachProjectOpenCodexButton);
+  }
+
   function nativeProjectTargets() {
     const section = projectsSection();
     const seen = new Set();
@@ -8511,6 +8575,7 @@
         }
       }
     }
+    refreshProjectOpenCodexButtons();
     refreshThreadIdBadges();
     sessionRows().forEach(tryAttachButton);
     updateDeleteButtonOffsets();
@@ -8539,7 +8604,7 @@
   }
 
   function isExtensionUiNode(node) {
-    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${projectMoveOverlayClass}, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #codex-plus-menu`);
+    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${projectMoveOverlayClass}, .${projectOpenCodexButtonClass}, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #codex-plus-menu`);
   }
 
   function scanRelevantSelector() {
