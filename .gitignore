@@ -33,3 +33,7 @@ pnpm-workspace.yaml
 
 # 本地实现计划文档（不入库）
 .local-plans/
+
+# 本地 agent 配置（不入库）
+.local-agents.md
+.local-agents.html
