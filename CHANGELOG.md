@@ -1,5 +1,12 @@
 # 更新日志
 
+## 1.0.9 - 2026-07-14
+
+修复 Tauri 打包后启动/重启 Codex 报「No such file or directory」。
+
+- **companion 路径查找适配 Tauri single-bundle**：`macos_companion_binary_from_exe` 新增 Tauri bundle 内 sidecar 查找分支——在 `CodexPlusPlus.app/Contents/MacOS/` 目录内用 `find_sidecar_binary` 查找 `codex-plus-plus-<triple>` sidecar。之前的旧 fallback 返回 `/Applications/Codex++.app/...` 路径（不存在），导致启动失败。
+- 「启动 Codex++」按钮（概览页）现在能正确找到 Tauri bundle 内的 launcher sidecar 并启动增强后的 Codex。
+
 ## 1.0.8 - 2026-07-13
 
 跨供应商模型路由（实验性）+ 预设清理。

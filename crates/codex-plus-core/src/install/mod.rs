@@ -337,7 +337,17 @@ fn macos_companion_binary_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> 
                 "CodexPlusPlus",
             ));
         }
-        // 3. 从 /Applications/Codex++.app 查找（旧独立安装）
+        // 3. Tauri single-bundle 模式：launcher 作为 sidecar 在 CodexPlusPlus.app 内
+        let tauri_app_macos = applications_dir
+            .join(&app_name)
+            .join("Contents")
+            .join("MacOS");
+        if let Some(sidecar) = find_sidecar_binary(&tauri_app_macos, SILENT_BINARY, "") {
+            if sidecar.exists() {
+                return Some(sidecar);
+            }
+        }
+        // 4. 从 /Applications/Codex++.app 查找（旧独立安装）
         //    即使文件不存在也返回最可能的路径（兼容测试假设和首次安装场景）
         let macos = applications_dir
             .join(format!("{SILENT_NAME}.app"))
